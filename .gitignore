@@ -21,6 +21,7 @@
 .apt_generated/
 .springBeans
 .sts4-cache/
+.github/
 
 # Logs and temporary files
 *.log
