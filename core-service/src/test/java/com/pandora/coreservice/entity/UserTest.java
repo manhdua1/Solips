@@ -58,25 +58,25 @@ class UserTest {
     @Test
     @DisplayName("Constructors initialize defaults and provided arguments properly")
     void testConstructors() {
-        User u1 = new User("alice", "hashA");
+        User u1 = new User(null, "alice", "hashA", Role.Employee, true);
         assertEquals("alice", u1.getUsername());
         assertEquals("hashA", u1.getPasswordHash());
         assertEquals(Role.Employee, u1.getRole());
         assertTrue(u1.isEnabled());
 
-        User u2 = new User("bob", "hashB", Role.Manager);
+        User u2 = new User(null, "bob", "hashB", Role.Manager, true);
         assertEquals("bob", u2.getUsername());
         assertEquals("hashB", u2.getPasswordHash());
         assertEquals(Role.Manager, u2.getRole());
         assertTrue(u2.isEnabled());
 
-        User u3 = new User("carol", "hashC", Role.Admin, false);
+        User u3 = new User(null, "carol", "hashC", Role.Admin, false);
         assertEquals("carol", u3.getUsername());
         assertEquals("hashC", u3.getPasswordHash());
         assertEquals(Role.Admin, u3.getRole());
         assertFalse(u3.isEnabled());
 
-        User u4 = new User("dave", "hashD", null, true);
+        User u4 = new User(null, "dave", "hashD", null, true);
         assertEquals(Role.Employee, u4.getRole());
     }
 
@@ -148,7 +148,7 @@ class UserTest {
     @Test
     @DisplayName("toString must not contain password hash")
     void testToStringSecurity() {
-        User user = new User("admin_user", "sensitive_hash_value_999", Role.Admin, true);
+        User user = new User(null, "admin_user", "sensitive_hash_value_999", Role.Admin, true);
         String asString = user.toString();
 
         assertNotNull(asString);
@@ -162,8 +162,8 @@ class UserTest {
     @Test
     @DisplayName("equals and hashCode do not depend on mutable fields")
     void testEqualsAndHashCode() {
-        User u1 = new User("user1", "hash1", Role.Employee, true);
-        User u2 = new User("user1", "hash1", Role.Employee, true);
+        User u1 = new User(null, "user1", "hash1", Role.Employee, true);
+        User u2 = new User(null, "user1", "hash1", Role.Employee, true);
 
         // Before persistence (id == null), equality is identity-based
         assertEquals(u1, u1);
