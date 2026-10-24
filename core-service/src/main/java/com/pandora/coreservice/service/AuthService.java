@@ -3,10 +3,11 @@ package com.pandora.coreservice.service;
 import com.pandora.coreservice.dto.LoginRequest;
 import com.pandora.coreservice.dto.LoginResponse;
 import com.pandora.coreservice.entity.User;
+import com.pandora.coreservice.exception.AppException;
+import com.pandora.coreservice.exception.ErrorCode;
 import com.pandora.coreservice.repo.UserRepository;
 import com.pandora.coreservice.security.JwtService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -20,13 +21,13 @@ public class AuthService {
 
     public LoginResponse login(LoginRequest request) {
         User user = userRepository.findByUsername(request.getUsername())
-                .orElseThrow(() -> new BadCredentialsException("Invalid username or password"));
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
 
         String passwordHash = user.getPasswordHash();
         boolean enabled = user.isEnabled();
 
         if (!enabled || passwordHash == null || !passwordEncoder.matches(request.getPassword(), passwordHash)) {
-            throw new BadCredentialsException("Invalid username or password");
+            throw new AppException(ErrorCode.INVALID_CREDENTIALS);
         }
 
         String token = jwtService.generateToken(user);

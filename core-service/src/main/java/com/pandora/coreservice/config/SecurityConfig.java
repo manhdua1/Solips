@@ -1,5 +1,8 @@
 package com.pandora.coreservice.config;
 
+import com.pandora.coreservice.security.JwtAccessDeniedHandler;
+import com.pandora.coreservice.security.JwtAuthenticationEntryPoint;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -16,9 +19,8 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
-import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
-import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
 import org.springframework.security.web.SecurityFilterChain;
+import tools.jackson.databind.ObjectMapper;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -72,10 +74,19 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        BearerTokenAuthenticationEntryPoint entryPoint = new BearerTokenAuthenticationEntryPoint();
-        BearerTokenAccessDeniedHandler accessDeniedHandler = new BearerTokenAccessDeniedHandler();
+    public JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint(ObjectProvider<ObjectMapper> objectMapperProvider) {
+        return new JwtAuthenticationEntryPoint(objectMapperProvider.getIfAvailable(ObjectMapper::new));
+    }
 
+    @Bean
+    public JwtAccessDeniedHandler jwtAccessDeniedHandler(ObjectProvider<ObjectMapper> objectMapperProvider) {
+        return new JwtAccessDeniedHandler(objectMapperProvider.getIfAvailable(ObjectMapper::new));
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   JwtAuthenticationEntryPoint entryPoint,
+                                                   JwtAccessDeniedHandler accessDeniedHandler) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)

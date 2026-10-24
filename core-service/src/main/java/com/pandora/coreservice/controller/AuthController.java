@@ -1,11 +1,11 @@
 package com.pandora.coreservice.controller;
 
+import com.pandora.coreservice.dto.ApiResponse;
 import com.pandora.coreservice.dto.LoginRequest;
 import com.pandora.coreservice.dto.LoginResponse;
 import com.pandora.coreservice.service.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,8 +19,8 @@ public class AuthController {
     private final AuthService authService;
 
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
+    public ApiResponse<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
         LoginResponse response = authService.login(request);
-        return ResponseEntity.ok(response);
+        return ApiResponse.success(response);
     }
 }

@@ -4,6 +4,8 @@ import com.pandora.coreservice.dto.LoginRequest;
 import com.pandora.coreservice.dto.LoginResponse;
 import com.pandora.coreservice.entity.TestUserFactory;
 import com.pandora.coreservice.entity.User;
+import com.pandora.coreservice.exception.AppException;
+import com.pandora.coreservice.exception.ErrorCode;
 import com.pandora.coreservice.repo.UserRepository;
 import com.pandora.coreservice.security.JwtService;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
@@ -75,8 +76,9 @@ class AuthServiceTest {
         LoginRequest request = new LoginRequest("nonexistent", "some_password");
 
         assertThatThrownBy(() -> authService.login(request))
-                .isInstanceOf(BadCredentialsException.class)
-                .hasMessage("Invalid username or password");
+                .isInstanceOf(AppException.class)
+                .hasMessage("Invalid credentials")
+                .satisfies(ex -> assertThat(((AppException) ex).getErrorCode()).isEqualTo(ErrorCode.INVALID_CREDENTIALS));
 
         verify(jwtService, never()).generateToken(any());
     }
@@ -93,8 +95,9 @@ class AuthServiceTest {
         LoginRequest request = new LoginRequest("valid_user", "wrong_pw");
 
         assertThatThrownBy(() -> authService.login(request))
-                .isInstanceOf(BadCredentialsException.class)
-                .hasMessage("Invalid username or password");
+                .isInstanceOf(AppException.class)
+                .hasMessage("Invalid credentials")
+                .satisfies(ex -> assertThat(((AppException) ex).getErrorCode()).isEqualTo(ErrorCode.INVALID_CREDENTIALS));
 
         verify(jwtService, never()).generateToken(any());
     }
@@ -110,8 +113,9 @@ class AuthServiceTest {
         LoginRequest request = new LoginRequest("disabled_user", "any_password");
 
         assertThatThrownBy(() -> authService.login(request))
-                .isInstanceOf(BadCredentialsException.class)
-                .hasMessage("Invalid username or password");
+                .isInstanceOf(AppException.class)
+                .hasMessage("Invalid credentials")
+                .satisfies(ex -> assertThat(((AppException) ex).getErrorCode()).isEqualTo(ErrorCode.INVALID_CREDENTIALS));
 
         verify(jwtService, never()).generateToken(any());
     }
