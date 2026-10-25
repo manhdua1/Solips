@@ -111,9 +111,7 @@ function App() {
 
         <section className="login-panel" aria-labelledby="login-title">
           <div className="panel-heading">
-            <span className="section-label">Không gian làm việc của bạn</span>
             <h2 id="login-title">Đăng nhập</h2>
-            <p>Sử dụng tài khoản do đơn vị của bạn cung cấp.</p>
           </div>
 
           <form onSubmit={handleSubmit} noValidate aria-busy={pending}>
@@ -150,12 +148,12 @@ function App() {
               {pending && <p className="loading-message">Đang xác thực tài khoản, vui lòng chờ…</p>}
             </div>
 
-            <button className="submit-button" type="submit" disabled={locked} aria-describedby="session-note">
+            <button className="submit-button" type="submit" disabled={locked} aria-describedby={authenticated ? 'session-note' : undefined}>
               {pending ? 'Đang đăng nhập…' : authenticated ? 'Đã đăng nhập' : 'Đăng nhập'}
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
             {authenticated && <button ref={logoutButton} className="logout-button" type="button" onClick={logout}>Đăng xuất khỏi phiên này</button>}
-            <p id="session-note" className="session-note">{authenticated ? 'Đăng xuất để đăng nhập bằng tài khoản khác. Thao tác này chỉ xóa phiên trên trang, không thu hồi token ở máy chủ.' : 'Đăng nhập bằng tên tài khoản và mật khẩu. Không sử dụng camera ở bước này.'}</p>
+            {authenticated && <p id="session-note" className="session-note">Đăng xuất để đăng nhập bằng tài khoản khác. Thao tác này chỉ xóa phiên trên trang, không thu hồi token ở máy chủ.</p>}
           </form>
         </section>
       </main>
