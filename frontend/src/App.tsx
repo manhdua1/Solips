@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FormEvent } from 'react'
 import { login, LoginError } from './auth'
-import type { LoginSession } from './auth'
+import { SessionStore } from './session'
+import Admin from './Admin'
 import './App.css'
 
 function FaceMark({ className = '' }: { className?: string }) {
@@ -22,8 +23,9 @@ function App() {
   const [errors, setErrors] = useState({ username: '', password: '' })
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
-  const [authenticated, setAuthenticated] = useState(false)
-  const session = useRef<LoginSession | null>(null)
+  const [store] = useState(() => new SessionStore())
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const authenticated = Boolean(state.session)
   const request = useRef<AbortController | null>(null)
   const usernameInput = useRef<HTMLInputElement>(null)
   const passwordInput = useRef<HTMLInputElement>(null)
@@ -31,16 +33,18 @@ function App() {
 
   useEffect(() => () => {
     request.current?.abort()
-    session.current = null
-  }, [])
+    request.current = null
+    store.dispose()
+  }, [store])
 
   useEffect(() => {
     if (authenticated) logoutButton.current?.focus()
+    else usernameInput.current?.focus()
   }, [authenticated])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (request.current || session.current) return
+    if (request.current || store.getSnapshot().session) return
 
     const nextErrors = {
       username: username.trim() ? '' : 'Vui lòng nhập tên đăng nhập.',
@@ -61,13 +65,14 @@ function App() {
     try {
       const result = await login(username, password, controller.signal)
       if (controller.signal.aborted) return
-      session.current = result
       setPassword('')
       setShowPassword(false)
-      setAuthenticated(true)
+      store.start(result)
     } catch (error) {
-      if (request.current === controller) {
-        setMessage(error instanceof LoginError ? error.message : 'Không thể đăng nhập. Vui lòng thử lại.')
+      if (request.current === controller && !controller.signal.aborted) {
+        setMessage(error instanceof LoginError ? error.message : 'Phiên đăng nhập không hợp lệ. Vui lòng thử lại.')
+      } else if (request.current === controller) {
+        setMessage('Yêu cầu quá thời gian. Vui lòng thử lại.')
       }
     } finally {
       window.clearTimeout(timeout)
@@ -78,18 +83,21 @@ function App() {
     }
   }
 
-  function logout() {
-    session.current = null
-    setAuthenticated(false)
+  const logout = useCallback((notice = '') => {
+    request.current?.abort()
+    request.current = null
+    store.clear(notice)
     setUsername('')
     setPassword('')
     setShowPassword(false)
     setErrors({ username: '', password: '' })
     setMessage('')
-    usernameInput.current?.focus()
-  }
+    setPending(false)
+  }, [store])
 
   const locked = pending || authenticated
+
+  if (state.session?.role === 'Admin') return <Admin session={state.session} username={username} logout={logout} />
 
   return (
     <div className="login-page">
@@ -143,8 +151,8 @@ function App() {
             </div>
 
             <div className="form-feedback" aria-live="polite" aria-atomic="true">
-              {message && <p className="error-message">{message}</p>}
-              {authenticated && <div className="success-message"><strong>Đăng nhập thành công.</strong><span>Bạn vẫn ở trang này. Phiên đăng nhập chỉ được giữ trong bộ nhớ và sẽ mất khi tải lại trang.</span></div>}
+              {(message || state.notice) && <p className="error-message">{message || state.notice}</p>}
+              {authenticated && <div className="success-message"><strong>Đăng nhập thành công.</strong><span>Giao diện hiện chỉ hỗ trợ tài khoản Admin. Tài khoản {state.session?.role} chưa có trang làm việc.</span></div>}
               {pending && <p className="loading-message">Đang xác thực tài khoản, vui lòng chờ…</p>}
             </div>
 
@@ -152,7 +160,7 @@ function App() {
               {pending ? 'Đang đăng nhập…' : authenticated ? 'Đã đăng nhập' : 'Đăng nhập'}
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
-            {authenticated && <button ref={logoutButton} className="logout-button" type="button" onClick={logout}>Đăng xuất khỏi phiên này</button>}
+            {authenticated && <button ref={logoutButton} className="logout-button" type="button" onClick={() => logout()}>Đăng xuất khỏi phiên này</button>}
             {authenticated && <p id="session-note" className="session-note">Đăng xuất để đăng nhập bằng tài khoản khác. Thao tác này chỉ xóa phiên trên trang, không thu hồi token ở máy chủ.</p>}
           </form>
         </section>

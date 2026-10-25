@@ -58,6 +58,8 @@ This document is the curated durable memory for the Solips project. It is read a
 
 ## 3. Current State
 
+- **Admin frontend completed (2026-10-25)**: Added `frontend/src/Admin.tsx`, `admin.css`, bearer CRUD client `api.ts` and memory session helpers `session.ts`; login now automatically shows admin sidebar for exact Admin role, with blank Dashboard and Employee/Department CRUD. Other roles remain on login with notice. Tables, pagination, detail/create/edit/delete dialogs, nullable relation selectors traversing all pages, cross-resource refresh and empty-last-page recovery implemented. JWT decoding is presentation-only; backend remains authorization boundary. Expiry/401 clears session; 403 stays distinct; no token persistence. Coordinator reran build/lint and 43 mocked tests successfully; no editor diagnostics, diff whitespace check clean (line-ending warning only). No backend/database startup or browser visual/keyboard/live API verification; these remain pending. Supersedes earlier connection blocker.
+
 - **Login frontend (2026-10-25)**: User requested self-designed simple Vietnamese face-attendance login UI connected to existing API, explicitly no redirect yet. Hard UI implemented responsive neutral/green layout, accessible username/password form with visibility toggle, loading/validation/sanitized errors, and same-page success/local logout. POST `/api/auth/login` uses existing ApiResponse token contract. Token stays memory-only, password clears on success; no actual camera auth or dashboard. Vite dev proxy `/api` defaults localhost:8080 with server-side API_PROXY_TARGET override; production needs same-origin reverse proxy. Delegate reports build/lint and 13 mocked API tests passed; coordinator found no frontend editor diagnostics. Browser/mobile interaction checks and live API login not verified; backend/database not started. Only frontend product files changed; existing work preserved.
 
 - **Frontend initialized (2026-10-25)**: Official Vite React + TypeScript starter created in `frontend/` with React 19, Vite 8 and npm scripts `dev`, `build`, `lint`, `preview`. `npm install` succeeded (27 packages, 0 reported vulnerabilities), `npm run build` and `npm run lint` passed, no editor diagnostics. `node_modules/` and `dist/` ignored. No product UI/API integration or running dev server; browser rendering not yet smoke-tested. Existing dirty root README and untracked initializer files preserved.
@@ -106,6 +108,7 @@ This document is the curated durable memory for the Solips project. It is read a
 ---
 
 ## 4. Blockers
+
 
 
 - **Database safety (2026-10-24)**: Read-only planning inspection reports current application configuration has `ddl-auto: update`; starting the application or context tests may modify persistent MySQL schema. Do not start either for entity verification. Configuration also reportedly contains hardcoded credentials; values are not recorded here and configuration changes are outside this task.
