@@ -40,5 +40,17 @@ class AppExceptionTest {
         assertThat(ErrorCode.INVALID_REQUEST.getCode()).isEqualTo(1004);
         assertThat(ErrorCode.INVALID_REQUEST.getMessage()).isEqualTo("Malformed request");
         assertThat(ErrorCode.INVALID_REQUEST.getHttpStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        assertThat(ErrorCode.RESOURCE_NOT_FOUND.getCode()).isEqualTo(1005);
+        assertThat(ErrorCode.RESOURCE_NOT_FOUND.getMessage()).isEqualTo("Resource not found");
+        assertThat(ErrorCode.RESOURCE_NOT_FOUND.getHttpStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+
+        assertThat(ErrorCode.DUPLICATE_RESOURCE.getCode()).isEqualTo(1006);
+        assertThat(ErrorCode.DUPLICATE_RESOURCE.getMessage()).isEqualTo("Resource already exists");
+        assertThat(ErrorCode.DUPLICATE_RESOURCE.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(ErrorCode.LOCK_CONFLICT.getCode()).isEqualTo(1007);
+        assertThat(ErrorCode.LOCK_CONFLICT.getMessage()).isEqualTo("Lock acquisition conflict; please retry");
+        assertThat(ErrorCode.LOCK_CONFLICT.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT);
     }
 }

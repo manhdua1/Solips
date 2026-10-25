@@ -28,11 +28,16 @@ public class JwtService {
         Objects.requireNonNull(userId, "User ID cannot be null");
 
         Instant now = Instant.now();
-        JwtClaimsSet claims = JwtClaimsSet.builder()
+        JwtClaimsSet.Builder claimsBuilder = JwtClaimsSet.builder()
                 .subject(userId.toString())
                 .issuedAt(now)
-                .expiresAt(now.plusSeconds(TOKEN_EXPIRY_SECONDS))
-                .build();
+                .expiresAt(now.plusSeconds(TOKEN_EXPIRY_SECONDS));
+
+        if (user.getRole() != null) {
+            claimsBuilder.claim("role", user.getRole().name());
+        }
+
+        JwtClaimsSet claims = claimsBuilder.build();
 
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
         return this.jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
