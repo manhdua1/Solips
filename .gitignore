@@ -51,3 +51,19 @@ Desktop.ini
 **/__pycache__/
 *.py[cod]
 *$py.class
+
+
+# Face dataset and benchmark sample files
+**/data/
+data/
+*.jpg
+*.jpeg
+*.png
+
+
+# Face dataset and benchmark sample files
+**/data/
+data/
+*.jpg
+*.jpeg
+*.png
