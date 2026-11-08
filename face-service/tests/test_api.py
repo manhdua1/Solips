@@ -38,13 +38,19 @@ def encode_image(img: np.ndarray, ext: str = ".jpg") -> bytes:
 
 
 class TestFaceServiceAPI(unittest.TestCase):
+    AUTH_SECRET = "solips-top-secret"
+    AUTH_HEADERS = {"X-Internal-Service-Key": "solips-top-secret"}
+
     def setUp(self):
         self.original_engine = main.engine
         self.fake_engine = FakeEngine()
         main.engine = self.fake_engine
+        self.env_patch = patch.dict(os.environ, {"FACE_SERVICE_SECRET": ""})
+        self.env_patch.start()
         self.client = TestClient(main.app)
 
     def tearDown(self):
+        self.env_patch.stop()
         main.engine = self.original_engine
 
     def test_health_check(self):
@@ -53,9 +59,26 @@ class TestFaceServiceAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"status": "ok"})
 
     def test_service_auth_when_secret_configured(self):
-        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": "solips-top-secret"}):
-            img_bytes = encode_image(create_test_image())
+        img_bytes = encode_image(create_test_image())
 
+        # When FACE_SERVICE_SECRET is empty/unset:
+        # /detect and /embed allow legacy internal calls
+        resp_detect_unauth = self.client.post(
+            "/detect",
+            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+        )
+        self.assertEqual(resp_detect_unauth.status_code, 200)
+
+        # /enrollment/embed fails closed with 503 CONFIG_UNAVAILABLE
+        resp_enroll_empty = self.client.post(
+            "/enrollment/embed",
+            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+        )
+        self.assertEqual(resp_enroll_empty.status_code, 503)
+        self.assertEqual(resp_enroll_empty.json()["detail"], "CONFIG_UNAVAILABLE")
+
+        # When FACE_SERVICE_SECRET is configured:
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": "solips-top-secret"}):
             # Missing auth header -> 401
             resp1 = self.client.post(
                 "/detect",
@@ -88,6 +111,14 @@ class TestFaceServiceAPI(unittest.TestCase):
                 files={"file": ("test.jpg", img_bytes, "image/jpeg")},
             )
             self.assertEqual(resp4.status_code, 200)
+
+            # Enrollment endpoint missing header -> 401
+            resp5 = self.client.post(
+                "/enrollment/embed",
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp5.status_code, 401)
+            self.assertEqual(resp5.json()["detail"], "UNAUTHORIZED")
 
     def test_unsupported_media_type(self):
         resp = self.client.post(
@@ -125,6 +156,16 @@ class TestFaceServiceAPI(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 413)
             self.assertIn("UPLOAD_LIMITS_EXCEEDED", resp.json()["detail"])
+
+        # Also test MAX_REQUEST_BYTES middleware header guard
+        with patch.object(main, "MAX_REQUEST_BYTES", 500):
+            resp_req = self.client.post(
+                "/detect",
+                headers={"content-length": "600"},
+                files={"file": ("test.jpg", b"small", "image/jpeg")},
+            )
+            self.assertEqual(resp_req.status_code, 413)
+            self.assertIn("UPLOAD_LIMITS_EXCEEDED", resp_req.json()["detail"])
 
     def test_image_dimensions_exceed_limits(self):
         # Limit side to 200px for testing
@@ -195,12 +236,14 @@ class TestFaceServiceAPI(unittest.TestCase):
         self.fake_engine.faces = []
         img_bytes = encode_image(create_test_image())
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "NO_FACE")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "NO_FACE")
 
     def test_enrollment_embed_multiple_faces(self):
         self.fake_engine.faces = [
@@ -209,68 +252,80 @@ class TestFaceServiceAPI(unittest.TestCase):
         ]
         img_bytes = encode_image(create_test_image())
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "MULTIPLE_FACES")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "MULTIPLE_FACES")
 
     def test_enrollment_embed_face_too_small(self):
         # Face box 80x80 < 120x120
         self.fake_engine.faces = [DummyFace(bbox=(50, 50, 130, 130))]
         img_bytes = encode_image(create_test_image(face_box=(50, 50, 130, 130)))
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "FACE_TOO_SMALL")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "FACE_TOO_SMALL")
 
     def test_enrollment_embed_image_blurry(self):
         self.fake_engine.faces = [DummyFace(bbox=(50, 50, 250, 250))]
         img_bytes = encode_image(create_test_image(face_type="blurry"))
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "IMAGE_BLURRY")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "IMAGE_BLURRY")
 
     def test_enrollment_embed_illumination_poor_dark(self):
         self.fake_engine.faces = [DummyFace(bbox=(50, 50, 250, 250))]
         img_bytes = encode_image(create_test_image(face_type="dark"))
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "ILLUMINATION_POOR")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "ILLUMINATION_POOR")
 
     def test_enrollment_embed_illumination_poor_bright(self):
         self.fake_engine.faces = [DummyFace(bbox=(50, 50, 250, 250))]
         img_bytes = encode_image(create_test_image(face_type="bright"))
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 422)
-        self.assertEqual(resp.json()["detail"], "ILLUMINATION_POOR")
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.json()["detail"], "ILLUMINATION_POOR")
 
     def test_enrollment_embed_success(self):
         self.fake_engine.faces = [DummyFace(bbox=(50, 50, 250, 250), det_score=0.995)]
         img_bytes = encode_image(create_test_image(face_type="valid"))
 
-        resp = self.client.post(
-            "/enrollment/embed",
-            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
-        )
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/embed",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
 
         self.assertEqual(data["modelId"], "buffalo_l")
         self.assertEqual(data["dimension"], 512)

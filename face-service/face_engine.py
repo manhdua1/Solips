@@ -19,9 +19,6 @@ class FaceEngine:
     MODEL_ID = "buffalo_l"
     PREPROCESSING_VERSION = "enrollment-v1"
     DIMENSION = 512
-    DEFAULT_RECOGNITION_SHA256 = (
-        "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
-    )
 
     def __init__(
         self,
@@ -64,8 +61,8 @@ class FaceEngine:
                 except Exception:
                     pass
 
-        # Fallback to known recognition artifact sha256
-        self._model_version = self.DEFAULT_RECOGNITION_SHA256
+        # Return controlled unavailable if real model artifact cannot be located
+        self._model_version = "UNAVAILABLE"
         return self._model_version
 
     @staticmethod

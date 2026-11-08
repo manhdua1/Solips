@@ -24,9 +24,28 @@ CONCURRENCY_LIMIT = int(os.getenv("FACE_CONCURRENCY_LIMIT", "4"))
 inference_semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
 
-def verify_auth(request: Request):
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": f"UPLOAD_LIMITS_EXCEEDED: Request payload exceeds maximum {MAX_REQUEST_BYTES} bytes limit"
+                    },
+                )
+        except (ValueError, TypeError):
+            pass
+    return await call_next(request)
+
+
+def verify_auth(request: Request, require_secret: bool = False):
     secret = os.getenv("FACE_SERVICE_SECRET", "").strip()
     if not secret:
+        if require_secret:
+            raise HTTPException(status_code=503, detail="CONFIG_UNAVAILABLE")
         # If no secret is configured, allow internal calls (e.g. dev/test)
         return
 
@@ -134,7 +153,7 @@ async def embed(request: Request, file: UploadFile = File(...)):
 
 @app.post("/enrollment/embed")
 async def enrollment_embed(request: Request, file: UploadFile = File(...)):
-    verify_auth(request)
+    verify_auth(request, require_secret=True)
     img = await read_and_validate_image(file)
 
     async with inference_semaphore:

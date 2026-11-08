@@ -51,4 +51,15 @@ public class Employee {
 
     @Column(name = "deleted_at")
     private Instant deletedAt;
+
+    @Column(name = "face_revision", nullable = false)
+    private Long faceRevision = 0L;
+
+    public Employee(UUID id, String code, String fullName, String email, Department department, EmployeeStatus status, Instant deletedAt) {
+        this(id, code, fullName, email, department, status, deletedAt, 0L);
+    }
+
+    public Long getFaceRevision() {
+        return faceRevision != null ? faceRevision : 0L;
+    }
 }
