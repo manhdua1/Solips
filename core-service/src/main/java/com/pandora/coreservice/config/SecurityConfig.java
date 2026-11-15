@@ -139,6 +139,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/kiosk/recognize").permitAll()
                         .requestMatchers("/api/employees", "/api/employees/**").hasRole("Admin")
                         .requestMatchers("/api/departments", "/api/departments/**").hasRole("Admin")
                         .anyRequest().authenticated()

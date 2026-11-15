@@ -22,4 +22,10 @@ public class EmployeeResponse {
     private String email;
     private UUID departmentId;
     private EmployeeStatus status;
+    private boolean faceRegistered;
+    private int faceSampleCount;
+
+    public EmployeeResponse(UUID id, String code, String fullName, String email, UUID departmentId, EmployeeStatus status) {
+        this(id, code, fullName, email, departmentId, status, false, 0);
+    }
 }

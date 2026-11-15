@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { login, LoginError } from './auth'
 import { SessionStore } from './session'
 import Admin from './Admin'
+import Kiosk from './Kiosk'
 import './App.css'
 
 function FaceMark({ className = '' }: { className?: string }) {
@@ -23,6 +24,12 @@ function App() {
   const [errors, setErrors] = useState({ username: '', password: '' })
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
+  const [view, setView] = useState<'app' | 'kiosk'>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#kiosk') {
+      return 'kiosk'
+    }
+    return 'app'
+  })
   const [store] = useState(() => new SessionStore())
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const authenticated = Boolean(state.session)
@@ -30,6 +37,18 @@ function App() {
   const usernameInput = useRef<HTMLInputElement>(null)
   const passwordInput = useRef<HTMLInputElement>(null)
   const logoutButton = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (window.location.hash === '#kiosk') {
+        setView('kiosk')
+      } else if (view === 'kiosk') {
+        setView('app')
+      }
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [view])
 
   useEffect(() => () => {
     request.current?.abort()
@@ -97,16 +116,64 @@ function App() {
 
   const locked = pending || authenticated
 
-  if (state.session?.role === 'Admin') return <Admin session={state.session} username={username} logout={logout} />
+  if (view === 'kiosk') {
+    return (
+      <Kiosk
+        onExit={() => {
+          setView('app')
+          if (typeof window !== 'undefined' && window.location.hash === '#kiosk') {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search)
+          }
+        }}
+        authenticated={authenticated}
+        role={state.session?.role}
+      />
+    )
+  }
+
+  if (state.session?.role === 'Admin') {
+    return (
+      <Admin
+        session={state.session}
+        username={username}
+        logout={logout}
+        onOpenKiosk={() => {
+          setView('kiosk')
+          if (typeof window !== 'undefined') {
+            window.location.hash = 'kiosk'
+          }
+        }}
+      />
+    )
+  }
 
   return (
     <div className="login-page">
       <header className="brand-bar">
-        <a className="brand" href="#main" aria-label="Solips — đến phần đăng nhập">
-          <FaceMark className="brand-mark" />
-          <span>solips<span className="brand-dot">.</span></span>
-        </a>
-        <span className="brand-description">Chấm công khuôn mặt</span>
+        <div className="brand-bar-brand">
+          <a className="brand" href="#main" aria-label="Solips — đến phần đăng nhập">
+            <FaceMark className="brand-mark" />
+            <span>solips<span className="brand-dot">.</span></span>
+          </a>
+          <span className="brand-description">Chấm công khuôn mặt</span>
+        </div>
+        <button
+          type="button"
+          className="kiosk-entry-button"
+          onClick={() => {
+            setView('kiosk')
+            if (typeof window !== 'undefined') {
+              window.location.hash = 'kiosk'
+            }
+          }}
+          aria-label="Mở máy chấm công nhận diện khuôn mặt"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+            <circle cx="12" cy="13" r="4" />
+          </svg>
+          <span>Mở máy chấm công (Kiosk)</span>
+        </button>
       </header>
 
       <main id="main" className="login-layout">

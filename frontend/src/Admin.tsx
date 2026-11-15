@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { createClient, errorMessage } from './api.ts'
-import type { Client, Department, Employee, EmployeeStatus, Page, Resource } from './api.ts'
+import type { Client, Department, Employee, EmployeeStatus, FaceStatus, Page, Resource } from './api.ts'
 import type { Session } from './session.ts'
+import FaceManager from './FaceManager.tsx'
 import './admin.css'
 
 const names = { employees: 'Nhân viên', departments: 'Phòng ban' }
@@ -23,8 +24,9 @@ function Dialog({ title, children, close }: { title: string; children: ReactNode
   </dialog>
 }
 
-function Editor({ kind, id, mode, client, close, saved }: { kind: Resource; id: string | null; mode: 'detail' | 'edit' | 'create' | 'delete'; client: Client; close: () => void; saved: () => void }) {
+function Editor({ kind, id, mode, client, close, saved, manageFace }: { kind: Resource; id: string | null; mode: 'detail' | 'edit' | 'create' | 'delete'; client: Client; close: () => void; saved: () => void; manageFace: (employee: Employee) => void }) {
   const [row, setRow] = useState<Row | null>(null)
+  const [faceStatus, setFaceStatus] = useState<FaceStatus | null>(null)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
@@ -43,19 +45,20 @@ function Editor({ kind, id, mode, client, close, saved }: { kind: Resource; id: 
     async function load() {
       setLoading(true); setReady(false); setError('')
       try {
-        const [detail, employeeOptions, departmentOptions] = await Promise.all([
+        const [detail, employeeOptions, departmentOptions, face] = await Promise.all([
           id ? client.detail(kind, id, controller.signal) : Promise.resolve(null),
           client.all('employees', controller.signal), client.all('departments', controller.signal),
+          id && kind === 'employees' && mode === 'detail' ? client.faceStatus(id, controller.signal) : Promise.resolve(null),
         ])
         if (controller.signal.aborted) return
-        setRow(detail); setEmployees(employeeOptions); setDepartments(departmentOptions); setReady(true)
+        setRow(detail); setFaceStatus(face); setEmployees(employeeOptions); setDepartments(departmentOptions); setReady(true)
         if (detail) setValues((previous) => ({ ...previous, ...detail, departmentId: 'departmentId' in detail ? detail.departmentId ?? '' : '', managerId: 'managerId' in detail ? detail.managerId ?? '' : '' }))
       } catch (failure) { if (!controller.signal.aborted) setError(errorMessage(failure)) }
       finally { if (!controller.signal.aborted) setLoading(false) }
     }
     void load()
     return () => { controller.abort(); request.current?.abort() }
-  }, [client, kind, id, retry])
+  }, [client, kind, id, mode, retry])
   useEffect(() => {
     if (!loading && !error) form.current?.querySelector<HTMLInputElement>('input')?.focus()
   }, [loading, error])
@@ -79,6 +82,7 @@ function Editor({ kind, id, mode, client, close, saved }: { kind: Resource; id: 
       {remove ? <><p>Bạn muốn xóa <strong>{row && label(row)}</strong>?</p><p className="delete-note">{kind === 'employees' ? 'Nhân viên sẽ bị xóa khỏi danh sách và không còn là quản lý của các phòng ban liên quan.' : 'Phòng ban sẽ bị xóa. Nhân viên liên quan sẽ không còn được gán phòng ban.'} Không thể hoàn tác từ giao diện này.</p></> : <fieldset disabled={pending}>
         {kind === 'employees' ? <>{textField('code', 'Mã nhân viên')}{textField('fullName', 'Họ và tên')}{textField('email', 'Email')}<div className="field"><label htmlFor="departmentId">Phòng ban</label><select id="departmentId" disabled={readonly} value={values.departmentId} onChange={(event) => setValues({ ...values, departmentId: event.target.value })}><option value="">Không có phòng ban</option>{values.departmentId && !departments.some((item) => item.id === values.departmentId) && <option value={values.departmentId}>Không còn khả dụng ({values.departmentId})</option>}{departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="field"><label htmlFor="status">Trạng thái</label><select id="status" required disabled={readonly} value={values.status} onChange={(event) => setValues({ ...values, status: event.target.value as EmployeeStatus })}>{Object.entries(statuses).map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></div></> : <>{textField('name', 'Tên phòng ban')}<div className="field"><label htmlFor="managerId">Quản lý</label><select id="managerId" disabled={readonly} value={values.managerId} onChange={(event) => setValues({ ...values, managerId: event.target.value })}><option value="">Không có quản lý</option>{values.managerId && !employees.some((item) => item.id === values.managerId) && <option value={values.managerId}>Không còn khả dụng ({values.managerId})</option>}{employees.map((item) => <option key={item.id} value={item.id}>{item.fullName} ({item.code})</option>)}</select></div></>}
       </fieldset>}
+      {readonly && row && 'fullName' in row && <div className="face-detail"><p>Khuôn mặt: {faceStatus?.registered ? `Đã đăng ký · ${faceStatus.sampleCount} mẫu` : 'Chưa đăng ký'}</p><button type="button" onClick={() => manageFace(row)}>Xem trạng thái / quản lý khuôn mặt</button><p className="delete-note">Trạng thái được tải từ máy chủ khi mở chi tiết và được kiểm tra lại khi quản lý khuôn mặt.</p></div>}
       <div className="dialog-actions"><button type="button" onClick={close}>{readonly ? 'Đóng' : 'Hủy'}</button>{!readonly && <button className={remove ? 'danger-button' : 'primary-button'} type="submit" disabled={pending || loading}>{pending ? 'Đang xử lý…' : remove ? 'Xác nhận xóa' : 'Lưu thay đổi'}</button>}</div>
     </form>}
   </Dialog>
@@ -94,6 +98,8 @@ function ResourcePage({ kind, client, changed, revision }: { kind: Resource; cli
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const [notice, setNotice] = useState('')
+  const [faceEmployee, setFaceEmployee] = useState<Employee | null>(null)
+  const [faceStatuses, setFaceStatuses] = useState<Record<string, FaceStatus>>({})
   const [editor, setEditor] = useState<{ id: string | null; mode: 'detail' | 'edit' | 'create' | 'delete' } | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -117,17 +123,18 @@ function ResourcePage({ kind, client, changed, revision }: { kind: Resource; cli
     <div className="resource-heading"><h2 id="resource-title">{names[kind]}</h2><div className="resource-tools"><button type="button" onClick={() => setReload(reload + 1)} disabled={loading}>Tải lại</button><button ref={addButton} type="button" className="primary-button" onClick={() => { setNotice(''); setEditor({ id: null, mode: 'create' }) }}>Thêm {names[kind].toLowerCase()}</button></div></div>
     <div role="status" className="resource-status">{loading ? 'Đang tải danh sách…' : notice}</div>
     {error && <p role="alert" className="error-message">{error}</p>}
-    {data && <><div className="table-scroll" tabIndex={0} role="region" aria-label={`Danh sách ${names[kind].toLowerCase()}, cuộn ngang nếu cần`}><table><caption className="sr-only">{names[kind]} — trang {page + 1}</caption><thead><tr>{kind === 'employees' ? <><th scope="col">Mã</th><th scope="col">Họ và tên</th><th scope="col">Email</th><th scope="col">Phòng ban</th><th scope="col">Trạng thái</th></> : <><th scope="col">Tên phòng ban</th><th scope="col">Quản lý</th></>}<th scope="col">Thao tác</th></tr></thead><tbody>{data.content.map((row) => <tr key={row.id}>{'fullName' in row ? <><td>{row.code}</td><th scope="row">{row.fullName}</th><td>{row.email}</td><td>{departmentName(row.departmentId)}</td><td><span className="status-badge">{statuses[row.status]}</span></td></> : <><th scope="row">{row.name}</th><td>{employeeName(row.managerId)}</td></>}<td><div className="row-actions">{(['detail', 'edit', 'delete'] as const).map((mode) => <button key={mode} type="button" aria-label={`${mode === 'detail' ? 'Chi tiết' : mode === 'edit' ? 'Sửa' : 'Xóa'} ${label(row)}`} onClick={() => { setNotice(''); setEditor({ id: row.id, mode }) }}>{mode === 'detail' ? 'Chi tiết' : mode === 'edit' ? 'Sửa' : 'Xóa'}</button>)}</div></td></tr>)}</tbody></table></div>{!data.content.length && <p className="empty-state">Chưa có {names[kind].toLowerCase()}. Chọn “Thêm {names[kind].toLowerCase()}” để tạo bản ghi đầu tiên.</p>}
+    {data && <><div className="table-scroll" tabIndex={0} role="region" aria-label={`Danh sách ${names[kind].toLowerCase()}, cuộn ngang nếu cần`}><table><caption className="sr-only">{names[kind]} — trang {page + 1}</caption><thead><tr>{kind === 'employees' ? <><th scope="col">Mã</th><th scope="col">Họ và tên</th><th scope="col">Email</th><th scope="col">Phòng ban</th><th scope="col">Trạng thái</th><th scope="col">Khuôn mặt</th></> : <><th scope="col">Tên phòng ban</th><th scope="col">Quản lý</th></>}<th scope="col">Thao tác</th></tr></thead><tbody>{data.content.map((row) => <tr key={row.id}>{'fullName' in row ? <><td>{row.code}</td><th scope="row">{row.fullName}</th><td>{row.email}</td><td>{departmentName(row.departmentId)}</td><td><span className="status-badge">{statuses[row.status]}</span></td><td><span className="status-badge">{(faceStatuses[row.id]?.registered ?? row.faceRegistered ?? false) ? `Đã đăng ký · ${faceStatuses[row.id]?.sampleCount ?? row.faceSampleCount ?? 0} mẫu` : row.faceRegistered === undefined && !faceStatuses[row.id] ? 'Chưa có dữ liệu tổng hợp' : 'Chưa đăng ký'}</span><button type="button" aria-label={`Quản lý khuôn mặt ${row.fullName}`} onClick={() => setFaceEmployee(row)}>Quản lý khuôn mặt</button></td></> : <><th scope="row">{row.name}</th><td>{employeeName(row.managerId)}</td></>}<td><div className="row-actions">{(['detail', 'edit', 'delete'] as const).map((mode) => <button key={mode} type="button" aria-label={`${mode === 'detail' ? 'Chi tiết' : mode === 'edit' ? 'Sửa' : 'Xóa'} ${label(row)}`} onClick={() => { setNotice(''); setEditor({ id: row.id, mode }) }}>{mode === 'detail' ? 'Chi tiết' : mode === 'edit' ? 'Sửa' : 'Xóa'}</button>)}</div></td></tr>)}</tbody></table></div>{!data.content.length && <p className="empty-state">Chưa có {names[kind].toLowerCase()}. Chọn “Thêm {names[kind].toLowerCase()}” để tạo bản ghi đầu tiên.</p>}
       <div className="pagination"><span>{data.totalElements} bản ghi · Trang {data.totalPages ? page + 1 : 0}/{data.totalPages}</span><label>Số dòng <select value={size} onChange={(event) => { setSize(Number(event.target.value)); setPage(0) }}>{[10, 20, 50, 100].map((value) => <option key={value}>{value}</option>)}</select></label><div><button type="button" disabled={loading || page === 0} onClick={() => setPage(page - 1)}>Trước</button><button type="button" disabled={loading || page + 1 >= data.totalPages} onClick={() => setPage(page + 1)}>Sau</button></div></div></>}
-    {editor && <Editor {...editor} kind={kind} client={client} close={() => setEditor(null)} saved={() => { setEditor(null); setNotice('Đã lưu thay đổi.'); changed(); addButton.current?.focus() }} />}
+    {editor && <Editor {...editor} kind={kind} client={client} close={() => setEditor(null)} manageFace={(employee) => { setEditor(null); setFaceEmployee(employee) }} saved={() => { setEditor(null); setNotice('Đã lưu thay đổi.'); changed(); addButton.current?.focus() }} />}
+    {faceEmployee && <FaceManager key={faceEmployee.id} id={faceEmployee.id} name={faceEmployee.fullName} client={client} close={() => { setFaceEmployee(null); addButton.current?.focus() }} changed={(status) => setFaceStatuses((previous) => ({ ...previous, [status.employeeId]: status }))} />}
   </section>
 }
 
-export default function Admin({ session, username, logout }: { session: Session; username: string; logout: (notice?: string) => void }) {
+export default function Admin({ session, username, logout, onOpenKiosk }: { session: Session; username: string; logout: (notice?: string) => void; onOpenKiosk?: () => void }) {
   const [active, setActive] = useState<'dashboard' | Resource>('dashboard')
   const [revision, setRevision] = useState(0)
   const client = useMemo(() => createClient(session, logout), [session, logout])
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => { heading.current?.focus() }, [active])
-  return <div className="admin-shell"><a className="skip-link" href="#admin-main">Đến nội dung chính</a><aside className="admin-sidebar"><a className="brand" href="#admin-main">solips<span className="brand-dot">.</span></a><p className="sidebar-description">Quản trị hệ thống</p><nav aria-label="Điều hướng quản trị">{(['dashboard', 'employees', 'departments'] as const).map((item) => <button key={item} type="button" aria-current={active === item ? 'page' : undefined} onClick={() => setActive(item)}>{item === 'dashboard' ? 'Dashboard' : names[item]}</button>)}</nav><div className="admin-account"><span>{username}</span><small>Admin</small><button type="button" onClick={() => logout()}>Đăng xuất</button></div></aside><main id="admin-main" className="admin-main"><header className="admin-header"><h1 ref={heading} tabIndex={-1}>{active === 'dashboard' ? 'Dashboard' : names[active]}</h1><span>Solips / Quản trị</span></header>{active !== 'dashboard' && <ResourcePage key={active} kind={active} client={client} revision={revision} changed={() => setRevision((value) => value + 1)} />}</main></div>
+  return <div className="admin-shell"><a className="skip-link" href="#admin-main">Đến nội dung chính</a><aside className="admin-sidebar"><a className="brand" href="#admin-main">solips<span className="brand-dot">.</span></a><p className="sidebar-description">Quản trị hệ thống</p><nav aria-label="Điều hướng quản trị">{(['dashboard', 'employees', 'departments'] as const).map((item) => <button key={item} type="button" aria-current={active === item ? 'page' : undefined} onClick={() => setActive(item)}>{item === 'dashboard' ? 'Dashboard' : names[item]}</button>)}{onOpenKiosk && <button type="button" className="kiosk-nav-btn" onClick={onOpenKiosk}>Máy chấm công</button>}</nav><div className="admin-account"><span>{username}</span><small>Admin</small><button type="button" onClick={() => logout()}>Đăng xuất</button></div></aside><main id="admin-main" className="admin-main"><header className="admin-header"><h1 ref={heading} tabIndex={-1}>{active === 'dashboard' ? 'Dashboard' : names[active]}</h1><span>Solips / Quản trị</span></header>{active !== 'dashboard' && <ResourcePage key={active} kind={active} client={client} revision={revision} changed={() => setRevision((value) => value + 1)} />}</main></div>
 }

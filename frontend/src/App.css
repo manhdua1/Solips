@@ -5,7 +5,26 @@
   padding: 0 clamp(24px, 6vw, 96px);
   background: radial-gradient(ellipse at 16% 45%, #e5ebdf 0%, transparent 55%);
 }
-.brand-bar { display: flex; align-items: center; gap: 26px; padding: 30px 0; }
+.brand-bar { display: flex; align-items: center; justify-content: space-between; gap: 26px; padding: 30px 0; }
+.brand-bar-brand { display: flex; align-items: center; gap: 26px; }
+.kiosk-entry-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 18px;
+  border: 1px solid #8caa94;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all .15s;
+}
+.kiosk-entry-button:hover {
+  background: #eaf0e6;
+  border-color: var(--green);
+}
 .brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; font-size: 32px; font-weight: 700; letter-spacing: -1.8px; }
 .brand-dot { color: #56806b; }
 .brand-mark { width: 33px; height: 37px; }
@@ -62,7 +81,9 @@ form { margin-top: 32px; }
   .intro h1 { font-size: 29px; letter-spacing: -.8px; }
 }
 @media (max-width: 650px) {
-  .brand-bar { padding: 22px 0; gap: 18px; }
+  .brand-bar { padding: 22px 0; gap: 16px; flex-direction: column; align-items: stretch; }
+  .brand-bar-brand { justify-content: space-between; }
+  .kiosk-entry-button { justify-content: center; width: 100%; }
   .brand-description { padding-left: 18px; font-size: 10px; }
   .login-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; max-width: 430px; padding: 16px 0 40px; }
   .intro { position: relative; padding-right: 72px; }

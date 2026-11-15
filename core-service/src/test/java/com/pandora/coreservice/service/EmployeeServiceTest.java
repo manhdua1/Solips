@@ -6,10 +6,13 @@ import com.pandora.coreservice.dto.EmployeeUpdateRequest;
 import com.pandora.coreservice.dto.PageResponse;
 import com.pandora.coreservice.entity.Department;
 import com.pandora.coreservice.entity.Employee;
+import com.pandora.coreservice.entity.EmployeeFaceEnrollment;
 import com.pandora.coreservice.entity.EmployeeStatus;
 import com.pandora.coreservice.exception.AppException;
 import com.pandora.coreservice.exception.ErrorCode;
 import com.pandora.coreservice.repo.DepartmentRepository;
+import com.pandora.coreservice.repo.EmployeeFaceEnrollmentRepository;
+import com.pandora.coreservice.repo.EmployeeFaceSampleRepository;
 import com.pandora.coreservice.repo.EmployeeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +48,12 @@ class EmployeeServiceTest {
 
     @Mock
     private DepartmentRepository departmentRepository;
+
+    @Mock
+    private EmployeeFaceEnrollmentRepository employeeFaceEnrollmentRepository;
+
+    @Mock
+    private EmployeeFaceSampleRepository employeeFaceSampleRepository;
 
     @InjectMocks
     private EmployeeService employeeService;
@@ -472,17 +481,18 @@ class EmployeeServiceTest {
     // --- Delete Tests ---
 
     @Test
-    @DisplayName("delete soft-deletes employee and clears all referencing department managers")
+    @DisplayName("delete soft-deletes employee, increments revision, and clears all referencing department managers")
     void testDeleteSuccessClearsManagerReferences() {
         when(employeeRepository.findActiveByIdForUpdate(employeeId)).thenReturn(Optional.of(activeEmployee));
 
         employeeService.delete(employeeId);
 
-        // Verify soft delete: deletedAt was set and saved
+        // Verify soft delete: deletedAt was set, faceRevision incremented, and saved
         ArgumentCaptor<Employee> captor = ArgumentCaptor.forClass(Employee.class);
         verify(employeeRepository).save(captor.capture());
         Employee saved = captor.getValue();
         assertThat(saved.getDeletedAt()).isNotNull();
+        assertThat(saved.getFaceRevision()).isEqualTo(1L);
 
         // Verify referencing department managers were detached
         verify(departmentRepository).clearManagerByManagerId(employeeId);
@@ -490,6 +500,111 @@ class EmployeeServiceTest {
         // Verify no physical deletion
         verify(employeeRepository, never()).delete(any());
         verify(employeeRepository, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("delete removes face enrollment and samples in same transaction and increments revision")
+    void testDeleteRemovesFaceEnrollmentAndSamplesAndIncrementsRevision() {
+        activeEmployee.setFaceRevision(2L);
+        UUID enrollmentId = UUID.randomUUID();
+        EmployeeFaceEnrollment enrollment = new EmployeeFaceEnrollment();
+        enrollment.setId(enrollmentId);
+        enrollment.setEmployeeId(employeeId);
+        enrollment.setSampleCount(3);
+
+        when(employeeRepository.findActiveByIdForUpdate(employeeId)).thenReturn(Optional.of(activeEmployee));
+        when(employeeFaceEnrollmentRepository.findByEmployeeId(employeeId)).thenReturn(Optional.of(enrollment));
+
+        employeeService.delete(employeeId);
+
+        // Verify samples and enrollment deletion
+        verify(employeeFaceSampleRepository).deleteByEnrollmentId(enrollmentId);
+        verify(employeeFaceEnrollmentRepository).delete(enrollment);
+
+        // Verify revision incremented from 2 to 3 and soft-deleted
+        ArgumentCaptor<Employee> captor = ArgumentCaptor.forClass(Employee.class);
+        verify(employeeRepository).save(captor.capture());
+        Employee saved = captor.getValue();
+        assertThat(saved.getDeletedAt()).isNotNull();
+        assertThat(saved.getFaceRevision()).isEqualTo(3L);
+
+        verify(departmentRepository).clearManagerByManagerId(employeeId);
+    }
+
+    @Test
+    @DisplayName("getPaginated maps faceRegistered and faceSampleCount via single batched lookup without N+1")
+    void testGetPaginatedBatchedEnrollmentLookupNoNPlusOne() {
+        UUID emp2Id = UUID.randomUUID();
+        Employee emp2 = new Employee();
+        emp2.setId(emp2Id);
+        emp2.setCode("EMP002");
+        emp2.setFullName("Bob Builder");
+        emp2.setEmail("bob@example.com");
+        emp2.setStatus(EmployeeStatus.ACTIVE);
+
+        Pageable pageable = PageRequest.of(0, 20, org.springframework.data.domain.Sort.by("id").ascending());
+        Page<Employee> page = new PageImpl<>(List.of(activeEmployee, emp2), pageable, 2);
+        when(employeeRepository.findByDeletedAtIsNull(any(Pageable.class))).thenReturn(page);
+
+        EmployeeFaceEnrollment enrollment1 = new EmployeeFaceEnrollment();
+        enrollment1.setId(UUID.randomUUID());
+        enrollment1.setEmployeeId(employeeId);
+        enrollment1.setSampleCount(3);
+
+        when(employeeFaceEnrollmentRepository.findByEmployeeIdIn(List.of(employeeId, emp2Id)))
+                .thenReturn(List.of(enrollment1));
+
+        PageResponse<EmployeeResponse> result = employeeService.getPaginated(0, 20);
+
+        assertThat(result.getContent()).hasSize(2);
+        EmployeeResponse resp1 = result.getContent().get(0);
+        assertThat(resp1.getId()).isEqualTo(employeeId);
+        assertThat(resp1.isFaceRegistered()).isTrue();
+        assertThat(resp1.getFaceSampleCount()).isEqualTo(3);
+
+        EmployeeResponse resp2 = result.getContent().get(1);
+        assertThat(resp2.getId()).isEqualTo(emp2Id);
+        assertThat(resp2.isFaceRegistered()).isFalse();
+        assertThat(resp2.getFaceSampleCount()).isEqualTo(0);
+
+        // Ensure batched query was called exactly once, no N+1 individual queries
+        verify(employeeFaceEnrollmentRepository).findByEmployeeIdIn(List.of(employeeId, emp2Id));
+        verify(employeeFaceEnrollmentRepository, never()).findByEmployeeId(any());
+    }
+
+    @Test
+    @DisplayName("getById maps faceRegistered and faceSampleCount when face enrollment exists")
+    void testGetByIdWithFaceEnrollment() {
+        when(employeeRepository.findByIdAndDeletedAtIsNull(employeeId)).thenReturn(Optional.of(activeEmployee));
+
+        EmployeeFaceEnrollment enrollment = new EmployeeFaceEnrollment();
+        enrollment.setId(UUID.randomUUID());
+        enrollment.setEmployeeId(employeeId);
+        enrollment.setSampleCount(3);
+
+        when(employeeFaceEnrollmentRepository.findByEmployeeIdIn(List.of(employeeId)))
+                .thenReturn(List.of(enrollment));
+
+        EmployeeResponse response = employeeService.getById(employeeId);
+
+        assertThat(response).isNotNull();
+        assertThat(response.getId()).isEqualTo(employeeId);
+        assertThat(response.isFaceRegistered()).isTrue();
+        assertThat(response.getFaceSampleCount()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("EmployeeResponse legacy 6-arg constructor preserves compatibility with default face values")
+    void testEmployeeResponseLegacyConstructor() {
+        EmployeeResponse resp = new EmployeeResponse(employeeId, "EMP001", "Alice Smith", "alice@example.com", departmentId, EmployeeStatus.ACTIVE);
+        assertThat(resp.getId()).isEqualTo(employeeId);
+        assertThat(resp.getCode()).isEqualTo("EMP001");
+        assertThat(resp.getFullName()).isEqualTo("Alice Smith");
+        assertThat(resp.getEmail()).isEqualTo("alice@example.com");
+        assertThat(resp.getDepartmentId()).isEqualTo(departmentId);
+        assertThat(resp.getStatus()).isEqualTo(EmployeeStatus.ACTIVE);
+        assertThat(resp.isFaceRegistered()).isFalse();
+        assertThat(resp.getFaceSampleCount()).isEqualTo(0);
     }
 
     @Test
