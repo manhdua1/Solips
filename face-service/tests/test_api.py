@@ -26,6 +26,12 @@ class FakeEngine:
     def analyze(self, img):
         return self.faces
 
+    def detect(self, img):
+        return self.faces
+
+    def evaluate_quality(self, img, face):
+        return self.real_engine.evaluate_quality(img, face)
+
     def evaluate_enrollment_quality(self, img, face):
         return self.real_engine.evaluate_enrollment_quality(img, face)
 
@@ -40,6 +46,14 @@ def encode_image(img: np.ndarray, ext: str = ".jpg") -> bytes:
 class TestFaceServiceAPI(unittest.TestCase):
     AUTH_SECRET = "solips-top-secret"
     AUTH_HEADERS = {"X-Internal-Service-Key": "solips-top-secret"}
+    THRESHOLD_KEYS = (
+        "MIN_FACE_WIDTH",
+        "MIN_FACE_HEIGHT",
+        "MIN_FACE_AREA_RATIO",
+        "MIN_LAPLACIAN_VAR",
+        "MIN_BRIGHTNESS",
+        "MAX_BRIGHTNESS",
+    )
 
     def setUp(self):
         self.original_engine = main.engine
@@ -47,10 +61,12 @@ class TestFaceServiceAPI(unittest.TestCase):
         main.engine = self.fake_engine
         self.env_patch = patch.dict(os.environ, {"FACE_SERVICE_SECRET": ""})
         self.env_patch.start()
+        self.orig_thresholds = {k: os.environ.pop(k) for k in self.THRESHOLD_KEYS if k in os.environ}
         self.client = TestClient(main.app)
 
     def tearDown(self):
         self.env_patch.stop()
+        os.environ.update(self.orig_thresholds)
         main.engine = self.original_engine
 
     def test_health_check(self):
@@ -338,6 +354,117 @@ class TestFaceServiceAPI(unittest.TestCase):
 
         quality = data["quality"]
         self.assertAlmostEqual(quality["detScore"], 0.995, places=3)
+        self.assertEqual(quality["faceWidth"], 200)
+        self.assertEqual(quality["faceHeight"], 200)
+        self.assertGreaterEqual(quality["laplacianVar"], 100.0)
+        self.assertGreaterEqual(quality["meanBrightness"], 50.0)
+        self.assertLessEqual(quality["meanBrightness"], 205.0)
+
+    def test_enrollment_quality_requires_auth(self):
+        img_bytes = encode_image(create_test_image())
+
+        # Unconfigured secret -> 503
+        resp_empty = self.client.post(
+            "/enrollment/quality",
+            files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+        )
+        self.assertEqual(resp_empty.status_code, 503)
+
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            # Missing header -> 401
+            resp_no_auth = self.client.post(
+                "/enrollment/quality",
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp_no_auth.status_code, 401)
+
+            # Valid header -> passes auth check (testing with no faces -> 422 NO_FACE)
+            self.fake_engine.faces = []
+            resp_authed = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp_authed.status_code, 422)
+            self.assertEqual(resp_authed.json()["detail"], "NO_FACE")
+
+    def test_enrollment_quality_errors(self):
+        img_bytes = encode_image(create_test_image())
+
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            # Multiple faces -> 422
+            self.fake_engine.faces = [
+                DummyFace(bbox=(10, 10, 50, 50)),
+                DummyFace(bbox=(60, 60, 100, 100)),
+            ]
+            resp_multi = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp_multi.status_code, 422)
+            self.assertEqual(resp_multi.json()["detail"], "MULTIPLE_FACES")
+
+            # Face too small -> 422
+            self.fake_engine.faces = [DummyFace(bbox=(50, 50, 130, 130))]
+            resp_small = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp_small.status_code, 422)
+            self.assertEqual(resp_small.json()["detail"], "FACE_TOO_SMALL")
+
+            # Image blurry -> 422
+            self.fake_engine.faces = [DummyFace(bbox=(50, 50, 250, 250))]
+            img_blurry = encode_image(create_test_image(face_type="blurry"))
+            resp_blur = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_blurry, "image/jpeg")},
+            )
+            self.assertEqual(resp_blur.status_code, 422)
+            self.assertEqual(resp_blur.json()["detail"], "IMAGE_BLURRY")
+
+            # Illumination poor -> 422
+            img_dark = encode_image(create_test_image(face_type="dark"))
+            resp_dark = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_dark, "image/jpeg")},
+            )
+            self.assertEqual(resp_dark.status_code, 422)
+            self.assertEqual(resp_dark.json()["detail"], "ILLUMINATION_POOR")
+
+    def test_enrollment_quality_success_without_embeddings(self):
+        # DummyFace without embedding
+        face = DummyFace(bbox=(50, 50, 250, 250), det_score=0.99)
+        delattr(face, "normed_embedding")
+        self.fake_engine.faces = [face]
+        img_bytes = encode_image(create_test_image(face_type="valid"))
+
+        with patch.dict(os.environ, {"FACE_SERVICE_SECRET": self.AUTH_SECRET}):
+            resp = self.client.post(
+                "/enrollment/quality",
+                headers=self.AUTH_HEADERS,
+                files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+
+        self.assertNotIn("embedding", data)
+        self.assertEqual(data["imageWidth"], 400)
+        self.assertEqual(data["imageHeight"], 400)
+        box = data["faceBox"]
+        self.assertGreaterEqual(box["x"], 0.0)
+        self.assertGreaterEqual(box["y"], 0.0)
+        self.assertGreater(box["width"], 0.0)
+        self.assertGreater(box["height"], 0.0)
+        self.assertLessEqual(box["x"] + box["width"], 1.0)
+        self.assertLessEqual(box["y"] + box["height"], 1.0)
+
+        quality = data["quality"]
+        self.assertAlmostEqual(quality["detScore"], 0.99, places=2)
         self.assertEqual(quality["faceWidth"], 200)
         self.assertEqual(quality["faceHeight"], 200)
         self.assertGreaterEqual(quality["laplacianVar"], 100.0)

@@ -1,6 +1,7 @@
 # face_engine.py
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -30,19 +31,24 @@ class FaceEngine:
         self.det_size = det_size
         self._model_version: Optional[str] = None
         self.app = None
+        self._init_lock = threading.Lock()
 
         if not lazy_load and model is not None:
             self._load_app()
 
     def _load_app(self):
-        from insightface.app import FaceAnalysis
+        with self._init_lock:
+            if self.app is not None:
+                return
+            from insightface.app import FaceAnalysis
 
-        self.app = FaceAnalysis(
-            name=self.model_name,
-            providers=["CPUExecutionProvider"],
-            allowed_modules=["detection", "recognition"],  # skip unused modules for speed
-        )
-        self.app.prepare(ctx_id=-1, det_size=self.det_size)
+            app = FaceAnalysis(
+                name=self.model_name,
+                providers=["CPUExecutionProvider"],
+                allowed_modules=["detection", "recognition"],  # skip unused modules for speed
+            )
+            app.prepare(ctx_id=-1, det_size=self.det_size)
+            self.app = app
 
     def get_model_version(self) -> str:
         if self._model_version is not None:
@@ -77,7 +83,27 @@ class FaceEngine:
             self._load_app()
         return self.app.get(img)
 
-    def evaluate_enrollment_quality(self, img: np.ndarray, face: Any) -> Dict[str, Any]:
+    def detect(self, img: np.ndarray):
+        if self.app is None:
+            self._load_app()
+        if hasattr(self.app, "det_model") and self.app.det_model is not None:
+            try:
+                from insightface.app.common import Face
+                bboxes, kpss = self.app.det_model.detect(img, max_num=0, metric="default")
+                if bboxes is None or bboxes.shape[0] == 0:
+                    return []
+                ret = []
+                for i in range(bboxes.shape[0]):
+                    bbox = bboxes[i, 0:4]
+                    det_score = float(bboxes[i, 4])
+                    kps = kpss[i] if kpss is not None else None
+                    ret.append(Face(bbox=bbox, kps=kps, det_score=det_score))
+                return ret
+            except Exception:
+                pass
+        return self.analyze(img)
+
+    def _evaluate_quality_metrics(self, img: np.ndarray, face: Any) -> Tuple[Dict[str, Any], Dict[str, float]]:
         h_img, w_img = img.shape[:2]
         bbox = face.bbox
         x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
@@ -133,6 +159,62 @@ class FaceEngine:
                 f"Mean brightness {mean_brightness:.1f} outside range [{min_brightness:.1f}, {max_brightness:.1f}]",
             )
 
+        # Normalized unmirrored clipped positive bounds
+        clip_x1 = max(0.0, min(float(w_img), x1))
+        clip_y1 = max(0.0, min(float(h_img), y1))
+        clip_x2 = max(0.0, min(float(w_img), x2))
+        clip_y2 = max(0.0, min(float(h_img), y2))
+        box_w = max(0.0, clip_x2 - clip_x1)
+        box_h = max(0.0, clip_y2 - clip_y1)
+
+        norm_x = max(0.0, min(1.0, clip_x1 / float(w_img))) if w_img > 0 else 0.0
+        norm_y = max(0.0, min(1.0, clip_y1 / float(h_img))) if h_img > 0 else 0.0
+        norm_w = max(0.0, min(1.0 - norm_x, box_w / float(w_img))) if w_img > 0 else 0.0
+        norm_h = max(0.0, min(1.0 - norm_y, box_h / float(h_img))) if h_img > 0 else 0.0
+
+        rx = round(norm_x, 4)
+        ry = round(norm_y, 4)
+        rw = round(min(norm_w, 1.0 - rx), 4)
+        rh = round(min(norm_h, 1.0 - ry), 4)
+        if rx + rw > 1.0:
+            rw = round(1.0 - rx, 4)
+        if ry + rh > 1.0:
+            rh = round(1.0 - ry, 4)
+
+        det_score = float(face.det_score) if hasattr(face, "det_score") else 1.0
+        det_score = max(0.0, min(1.0, det_score))
+
+        quality_metrics = {
+            "detScore": round(det_score, 4),
+            "faceWidth": int(round(face_w)),
+            "faceHeight": int(round(face_h)),
+            "faceAreaRatio": round(area_ratio, 4),
+            "laplacianVar": round(laplacian_var, 2),
+            "meanBrightness": round(mean_brightness, 2),
+        }
+
+        face_box = {
+            "x": rx,
+            "y": ry,
+            "width": rw,
+            "height": rh,
+        }
+
+        return quality_metrics, face_box
+
+    def evaluate_quality(self, img: np.ndarray, face: Any) -> Dict[str, Any]:
+        h_img, w_img = img.shape[:2]
+        quality_metrics, face_box = self._evaluate_quality_metrics(img, face)
+        return {
+            "imageWidth": int(w_img),
+            "imageHeight": int(h_img),
+            "faceBox": face_box,
+            "quality": quality_metrics,
+        }
+
+    def evaluate_enrollment_quality(self, img: np.ndarray, face: Any) -> Dict[str, Any]:
+        quality_metrics, _ = self._evaluate_quality_metrics(img, face)
+
         # Vector normalization and finite check
         raw_emb = getattr(face, "normed_embedding", None)
         if raw_emb is None:
@@ -156,12 +238,5 @@ class FaceEngine:
             "modelId": self.MODEL_ID,
             "modelVersion": self.get_model_version(),
             "preprocessingVersion": self.PREPROCESSING_VERSION,
-            "quality": {
-                "detScore": float(face.det_score) if hasattr(face, "det_score") else 1.0,
-                "faceWidth": int(round(face_w)),
-                "faceHeight": int(round(face_h)),
-                "faceAreaRatio": round(area_ratio, 4),
-                "laplacianVar": round(laplacian_var, 2),
-                "meanBrightness": round(mean_brightness, 2),
-            },
+            "quality": quality_metrics,
         }

@@ -9,6 +9,11 @@ import numpy as np
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from config import load_environment
+
+# Load optional .env configuration before importing engine or reading environment variables
+load_environment()
+
 from face_engine import FaceEngine, QualityCheckError
 
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(2 * 1024 * 1024)))  # 2 MiB per image default
@@ -171,3 +176,33 @@ async def enrollment_embed(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail=e.code)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/enrollment/quality")
+async def enrollment_quality(request: Request, file: UploadFile = File(...)):
+    verify_auth(request, require_secret=True)
+    img = await read_and_validate_image(file)
+
+    async with inference_semaphore:
+        faces = engine.detect(img)
+
+    if not faces:
+        raise HTTPException(status_code=422, detail="NO_FACE")
+    if len(faces) > 1:
+        raise HTTPException(status_code=422, detail="MULTIPLE_FACES")
+
+    try:
+        result = engine.evaluate_quality(img, faces[0])
+        return JSONResponse(status_code=200, content=result)
+    except QualityCheckError as e:
+        raise HTTPException(status_code=422, detail=e.code)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.getenv("FACE_SERVICE_HOST", "127.0.0.1")
+    port = int(os.getenv("FACE_SERVICE_PORT", "8001"))
+    uvicorn.run("main:app", host=host, port=port, reload=False)

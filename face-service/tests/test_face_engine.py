@@ -67,9 +67,25 @@ def create_test_image(
 
 
 class TestFaceEngineQuality(unittest.TestCase):
+    THRESHOLD_KEYS = (
+        "MIN_FACE_WIDTH",
+        "MIN_FACE_HEIGHT",
+        "MIN_FACE_AREA_RATIO",
+        "MIN_LAPLACIAN_VAR",
+        "MIN_BRIGHTNESS",
+        "MAX_BRIGHTNESS",
+    )
+
     def setUp(self):
+        self.orig_environ = os.environ.copy()
+        for k in self.THRESHOLD_KEYS:
+            os.environ.pop(k, None)
         # Initialize FaceEngine in lazy mode so no models are loaded
         self.engine = FaceEngine(lazy_load=True)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.orig_environ)
 
     def test_valid_face_quality_evaluation(self):
         img = create_test_image(width=400, height=400, face_box=(50, 50, 250, 250), face_type="valid")
@@ -153,6 +169,74 @@ class TestFaceEngineQuality(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.engine.evaluate_enrollment_quality(img, face)
+
+    def test_valid_probe_quality_evaluation(self):
+        img = create_test_image(width=400, height=400, face_box=(50, 50, 250, 250), face_type="valid")
+        face = DummyFace(bbox=(50, 50, 250, 250), det_score=0.99)
+
+        result = self.engine.evaluate_quality(img, face)
+
+        self.assertNotIn("embedding", result)
+        self.assertEqual(result["imageWidth"], 400)
+        self.assertEqual(result["imageHeight"], 400)
+
+        box = result["faceBox"]
+        self.assertGreaterEqual(box["x"], 0.0)
+        self.assertGreaterEqual(box["y"], 0.0)
+        self.assertGreater(box["width"], 0.0)
+        self.assertGreater(box["height"], 0.0)
+        self.assertLessEqual(box["x"] + box["width"], 1.0)
+        self.assertLessEqual(box["y"] + box["height"], 1.0)
+        self.assertAlmostEqual(box["x"], 50.0 / 400.0, places=3)
+        self.assertAlmostEqual(box["y"], 50.0 / 400.0, places=3)
+        self.assertAlmostEqual(box["width"], 200.0 / 400.0, places=3)
+        self.assertAlmostEqual(box["height"], 200.0 / 400.0, places=3)
+
+        quality = result["quality"]
+        self.assertEqual(quality["faceWidth"], 200)
+        self.assertEqual(quality["faceHeight"], 200)
+        self.assertGreaterEqual(quality["detScore"], 0.0)
+        self.assertLessEqual(quality["detScore"], 1.0)
+        self.assertGreaterEqual(quality["laplacianVar"], 100.0)
+        self.assertGreaterEqual(quality["meanBrightness"], 50.0)
+        self.assertLessEqual(quality["meanBrightness"], 205.0)
+
+    def test_evaluate_quality_does_not_require_embedding(self):
+        img = create_test_image(width=400, height=400, face_box=(50, 50, 250, 250), face_type="valid")
+        face = DummyFace(bbox=(50, 50, 250, 250), det_score=0.98)
+        # Deliberately remove embedding attributes
+        delattr(face, "normed_embedding")
+
+        # evaluate_quality succeeds without embeddings (detection-only probe)
+        result = self.engine.evaluate_quality(img, face)
+        self.assertNotIn("embedding", result)
+        self.assertEqual(result["imageWidth"], 400)
+
+        # evaluate_enrollment_quality must reject missing embedding
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.evaluate_enrollment_quality(img, face)
+        self.assertIn("missing embedding", str(ctx.exception))
+
+    def test_probe_quality_boundary_failures(self):
+        # Blur failure
+        img_blur = create_test_image(width=400, height=400, face_box=(50, 50, 250, 250), face_type="blurry")
+        face = DummyFace(bbox=(50, 50, 250, 250))
+        with self.assertRaises(QualityCheckError) as ctx:
+            self.engine.evaluate_quality(img_blur, face)
+        self.assertEqual(ctx.exception.code, "IMAGE_BLURRY")
+
+        # Size failure
+        img_small = create_test_image(width=400, height=400, face_box=(50, 50, 130, 130), face_type="valid")
+        face_small = DummyFace(bbox=(50, 50, 130, 130))
+        with self.assertRaises(QualityCheckError) as ctx:
+            self.engine.evaluate_quality(img_small, face_small)
+        self.assertEqual(ctx.exception.code, "FACE_TOO_SMALL")
+
+        # Illumination failure
+        img_dark = create_test_image(width=400, height=400, face_box=(50, 50, 250, 250), face_type="dark")
+        with self.assertRaises(QualityCheckError) as ctx:
+            self.engine.evaluate_quality(img_dark, face)
+        self.assertEqual(ctx.exception.code, "ILLUMINATION_POOR")
 
 
 if __name__ == "__main__":
