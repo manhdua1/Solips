@@ -161,7 +161,6 @@ When `core-service` sends enrollment images to `face-service` or receives reques
 | Upstream / Operation Condition | Upstream `detail` / Cause | Target `ErrorCode` | Application Code | HTTP Status to Client | Default Message |
 |---|---|---|---|---|---|
 | Revision mismatch | Revision conflict / stale data | `STALE_REVISION` | 1008 | 409 CONFLICT | Face revision conflict; please refresh |
-| Consent version mismatch | Consent policy version outdated | `INVALID_CONSENT_VERSION` | 1009 | 409 CONFLICT | Consent version mismatch or outdated |
 | File/payload exceeds limit | File > 2MiB or request > 7MiB | `UPLOAD_TOO_LARGE` | 1010 | 413 PAYLOAD_TOO_LARGE | Image or request payload exceeds limit |
 | Unsupported media type | Not JPEG/PNG or invalid magic bytes | `UNSUPPORTED_MEDIA_TYPE` | 1011 | 415 UNSUPPORTED_MEDIA_TYPE | Unsupported media type; expected JPEG or PNG |
 | Face not detected | `NO_FACE` | `NO_FACE` | 1012 | 422 UNPROCESSABLE_ENTITY | No face detected in image |
@@ -169,7 +168,6 @@ When `core-service` sends enrollment images to `face-service` or receives reques
 | Face too small/far | `FACE_TOO_SMALL` | `FACE_TOO_SMALL` | 1014 | 422 UNPROCESSABLE_ENTITY | Face is too small or too far away |
 | Image is blurry | `IMAGE_BLURRY` | `IMAGE_BLURRY` | 1015 | 422 UNPROCESSABLE_ENTITY | Image is blurry |
 | Illumination poor | `ILLUMINATION_POOR` | `ILLUMINATION_POOR` | 1016 | 422 UNPROCESSABLE_ENTITY | Lighting is too dark or overexposed |
-| Consent receipt invalid/expired | Receipt invalid/expired/declined | `INVALID_CONSENT` | 1017 | 422 UNPROCESSABLE_ENTITY | Face consent is invalid, expired, or not accepted |
 | Upstream service error | 502 / 500 / unexpected response | `UPSTREAM_FACE_SERVICE_ERROR` | 1018 | 502 BAD_GATEWAY | Face service upstream error |
 | Service unavailable | Connection refused / unreachable | `FACE_SERVICE_UNAVAILABLE` | 1019 | 503 SERVICE_UNAVAILABLE | Face service is unavailable |
 | Request timeout | Timeout communicating upstream | `FACE_SERVICE_TIMEOUT` | 1020 | 504 GATEWAY_TIMEOUT | Face service request timed out |

@@ -38,17 +38,8 @@ public class EmployeeFaceEnrollment {
     @Column(name = "enrolled_at", nullable = false)
     private Instant enrolledAt;
 
-    @Column(name = "consented_at", nullable = false)
-    private Instant consentedAt;
-
-    @Column(name = "consented_by_admin_id", nullable = false)
-    private UUID consentedByAdminId;
-
-    @Column(name = "consent_version", nullable = false, length = 64)
-    private String consentVersion;
-
-    @Column(name = "consent_text", nullable = false, columnDefinition = "TEXT")
-    private String consentText;
+    @Column(name = "enrolled_by_admin_id")
+    private UUID enrolledByAdminId;
 
     @Column(name = "model_id", nullable = false, length = 64)
     private String modelId;

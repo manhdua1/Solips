@@ -1,8 +1,6 @@
 package com.pandora.coreservice.controller;
 
 import com.pandora.coreservice.dto.ApiResponse;
-import com.pandora.coreservice.dto.FaceConsentRequest;
-import com.pandora.coreservice.dto.FaceConsentResponse;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
 import com.pandora.coreservice.exception.AppException;
@@ -23,7 +21,6 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,26 +51,12 @@ public class FaceEnrollmentController {
                 .body(ApiResponse.success(response));
     }
 
-    @PostMapping("/consent")
-    public ResponseEntity<ApiResponse<FaceConsentResponse>> issueConsent(
-            @PathVariable("id") UUID id,
-            @AuthenticationPrincipal Jwt jwt,
-            Authentication authentication,
-            @Valid @RequestBody FaceConsentRequest request) {
-        UUID adminId = extractActorId(jwt, authentication);
-        FaceConsentResponse response = faceEnrollmentService.issueConsent(id, adminId, request);
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .body(ApiResponse.success(response));
-    }
-
     @PutMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<FaceEnrollmentResponse>> enroll(
             @PathVariable("id") UUID id,
             @AuthenticationPrincipal Jwt jwt,
             Authentication authentication,
             @RequestParam("images") List<MultipartFile> images,
-            @RequestParam("consentToken") String consentToken,
             @RequestParam(name = "expectedRevision", required = true) @NotNull @PositiveOrZero Long expectedRevision,
             HttpServletRequest request) {
 
@@ -92,7 +75,7 @@ public class FaceEnrollmentController {
 
         UUID adminId = extractActorId(jwt, authentication);
         FaceEnrollmentResponse response = faceEnrollmentService.enroll(
-                id, adminId, images, consentToken, expectedRevision
+                id, adminId, images, expectedRevision
         );
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())

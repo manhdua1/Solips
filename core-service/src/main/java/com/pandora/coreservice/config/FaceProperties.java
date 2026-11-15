@@ -10,7 +10,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class FaceProperties {
 
     private Service service = new Service();
-    private Consent consent = new Consent();
     private Image image = new Image();
 
     @Getter
@@ -23,14 +22,6 @@ public class FaceProperties {
         private String expectedModelId = "buffalo_l";
         private String expectedModelVersion = "";
         private String expectedPreprocessingVersion = "enrollment-v1";
-    }
-
-    @Getter
-    @Setter
-    public static class Consent {
-        private String secret = "";
-        private String version = "face-enrollment-v1";
-        private long expiryMinutes = 10L;
     }
 
     @Getter

@@ -22,11 +22,5 @@ public class FaceEnrollmentResponse {
     private boolean registered;
     private int sampleCount;
     private long revision;
-    private String consentVersion;
-    private String consentText;
-
     private Instant enrolledAt;
-    private Instant consentedAt;
-    private UUID consentedByAdminId;
-    private String acceptedConsentVersion;
 }

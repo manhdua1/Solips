@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from './api.ts'
-import type { Client, FaceReceipt, FaceStatus } from './api.ts'
+import type { Client, FaceStatus } from './api.ts'
 import './face.css'
 
 type Capture = { blob: Blob; url: string }
@@ -15,8 +15,6 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
   const generation = useRef(0)
   const busy = useRef(false)
   const [status, setStatus] = useState<FaceStatus | null>(null)
-  const [receipt, setReceipt] = useState<FaceReceipt | null>(null)
-  const [accepted, setAccepted] = useState(false)
   const [samples, setSamples] = useState<Capture[]>([])
   const [pending, setPending] = useState(true)
   const [camera, setCamera] = useState(false)
@@ -33,7 +31,7 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
     captures.current = []
   }
   function reset() {
-    release(); setSamples([]); setCamera(false); setReceipt(null); setAccepted(false); setConfirmDelete(false)
+    release(); setSamples([]); setCamera(false); setConfirmDelete(false)
   }
   async function refresh(signal: AbortSignal) {
     const result = await client.faceStatus(id, signal)
@@ -56,14 +54,6 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, id])
 
-  useEffect(() => {
-    if (!receipt) return
-    const timer = window.setTimeout(() => {
-      reset(); setError('Xác nhận đồng ý đã hết hạn. Vui lòng đọc và xác nhận lại trước khi mở camera.')
-    }, Math.max(0, Date.parse(receipt.expiresAt) - Date.now()))
-    return () => window.clearTimeout(timer)
-  }, [receipt])
-
   async function run(action: (signal: AbortSignal) => Promise<void>) {
     if (busy.current || pending || !lifetime.current) return
     busy.current = true; setPending(true); setError(''); setNotice('')
@@ -73,26 +63,22 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
     finally { if (!signal.aborted) { busy.current = false; setPending(false) } }
   }
   async function begin(signal: AbortSignal) {
-    if (!status || !accepted || needsRefresh) return
-    // Never request camera permission before the server records employee consent.
-    const token = await client.faceConsent(id, status.consentVersion, status.revision, signal)
-    if (signal.aborted) return
-    setReceipt(token)
+    if (!status || needsRefresh) return
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('camera unavailable')
     const attempt = ++generation.current
     let media: MediaStream
     try { media = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false }) }
     catch {
-      if (!signal.aborted && attempt === generation.current) { reset(); setError('Không mở được camera. Kiểm tra quyền camera, kết nối HTTPS và thiết bị rồi xác nhận lại.') }
+      if (!signal.aborted && attempt === generation.current) { reset(); setError('Không mở được camera. Kiểm tra quyền camera, kết nối HTTPS và thiết bị rồi thử lại.') }
       return
     }
-    if (signal.aborted || attempt !== generation.current || Date.parse(token.expiresAt) <= Date.now()) { stop(media); return }
+    if (signal.aborted || attempt !== generation.current) { stop(media); return }
     stream.current = media
     if (video.current) { video.current.srcObject = media; await video.current.play() }
     if (!signal.aborted && attempt === generation.current) setCamera(true)
   }
   async function capture() {
-    if (busy.current || !video.current || !receipt || samples.length >= 3) return
+    if (busy.current || !video.current || !camera || samples.length >= 3) return
     const source = video.current
     if (source.readyState < 2 || !source.videoWidth || !stream.current?.active) { setError('Camera chưa sẵn sàng. Vui lòng thử lại.'); return }
     const attempt = generation.current
@@ -113,13 +99,13 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
   }
   async function mutate(remove: boolean, signal: AbortSignal) {
     if (!status || needsRefresh) return
-    if (!remove && (!receipt || Date.parse(receipt.expiresAt) <= Date.now() || samples.length !== 3)) { reset(); return }
+    if (!remove && samples.length !== 3) { reset(); return }
     stop(stream.current); stream.current = null; setCamera(false)
     try {
-      const result = remove ? await client.deleteFace(id, status.revision, signal) : await client.enrollFace(id, samples.map((sample) => sample.blob), receipt!.consentToken, status.revision, signal)
+      const result = remove ? await client.deleteFace(id, status.revision, signal) : await client.enrollFace(id, samples.map((sample) => sample.blob), status.revision, signal)
       if (signal.aborted) return
       reset(); setStatus(result); changed(result)
-      setNotice(remove ? 'Đã xóa toàn bộ mẫu khuôn mặt và đồng ý liên quan.' : 'Đã lưu 3 mẫu khuôn mặt. Đây không phải kết quả nhận diện hay chấm công.')
+      setNotice(remove ? 'Đã xóa toàn bộ mẫu khuôn mặt.' : 'Đã lưu 3 mẫu khuôn mặt. Đây không phải kết quả nhận diện hay chấm công.')
     } catch (failure) {
       if (signal.aborted) return
       reset(); setNeedsRefresh(true)
@@ -140,21 +126,18 @@ export default function FaceManager({ id, name, client, close, changed }: { id: 
       {error && <p className="error-message" role="alert">{error}</p>}
       <button type="button" disabled={pending} onClick={() => void run(async (signal) => { reset(); setNeedsRefresh(true); await refresh(signal) })}>Tải lại trạng thái</button>
       {status && !needsRefresh && <>
-        <section className="face-consent" aria-labelledby="consent-title"><h3 id="consent-title">01 / Nhân viên đọc và đồng ý</h3><p className="face-notice">{status.consentText}</p><small>Phiên bản nội dung: {status.consentVersion}</small><p>Admin hỗ trợ thao tác. Nhân viên cần tự đọc và đánh dấu ô bên dưới; đây không phải xác minh danh tính hay bằng chứng hiện diện trực tiếp.</p>
-          <label className="face-check"><input type="checkbox" checked={accepted} disabled={pending || !!receipt} onChange={(event) => setAccepted(event.target.checked)} /><span>Tôi là nhân viên này, đã đọc nội dung và đồng ý đăng ký mẫu khuôn mặt.</span></label>
-          {!receipt && <button type="button" className="primary-button" disabled={pending || !accepted} onClick={() => void run(async (signal) => {
-            try { await begin(signal) } catch (failure) { reset(); setNeedsRefresh(true); try { await refresh(signal) } catch { /* Keep refresh required. */ } throw failure }
-          })}>Ghi nhận đồng ý và mở camera</button>}
-          {receipt && <p role="status">Đã nhận xác nhận từ máy chủ. Chỉ lưu sau khi đủ 3 ảnh và bạn chọn lưu.</p>}
-        </section>
-        <section className="face-capture" aria-labelledby="capture-title"><h3 id="capture-title">02 / Chụp và kiểm tra 3 ảnh</h3><p>Một người trong khung, đủ sáng, nhìn thẳng rồi nghiêng nhẹ giữa các lần chụp. Ảnh chỉ là bản xem trước; máy chủ sẽ kiểm tra chất lượng. Không kiểm tra liveness.</p>
+        <section className="face-capture" aria-labelledby="capture-title"><h3 id="capture-title">Chụp và kiểm tra 3 ảnh</h3><p>Một người trong khung, đủ sáng, nhìn thẳng rồi nghiêng nhẹ giữa các lần chụp. Ảnh chỉ là bản xem trước; máy chủ sẽ kiểm tra chất lượng. Không kiểm tra liveness.</p>
+          <p>Chỉ lưu sau khi đủ 3 ảnh và bạn chọn lưu.</p>
+          {!camera && <button type="button" className="primary-button" disabled={pending} onClick={() => void run(async (signal) => {
+            try { await begin(signal) } catch (failure) { reset(); throw failure }
+          })}>Mở camera</button>}
           <div className="face-viewport"><video ref={video} muted playsInline autoPlay aria-label="Xem trước camera đăng ký khuôn mặt" />{!camera && <span>Camera đang tắt</span>}</div>
           <div className="face-capture-tools"><span role="status">{samples.length}/3 ảnh tạm · JPEG ≤ 2 MiB/ảnh</span><button type="button" disabled={pending || !camera || samples.length >= 3} onClick={() => void capture()}>Chụp ảnh {Math.min(samples.length + 1, 3)}</button></div>
           <ol className="face-previews">{samples.map((sample, index) => <li key={sample.url}><img src={sample.url} alt={`Ảnh tạm ${index + 1} của ${name}`} /><button type="button" disabled={pending} onClick={() => { URL.revokeObjectURL(sample.url); const next = captures.current.filter((item) => item !== sample); captures.current = next; setSamples(next) }}>Chụp lại ảnh {index + 1}</button></li>)}</ol>
           <p className="delete-note">Ảnh tạm chỉ ở bộ nhớ phiên này, được giải phóng khi đóng. Máy chủ lưu mẫu đặc trưng, không giữ ảnh gốc. Đăng ký lại chỉ thay thế mẫu cũ khi lưu thành công.</p>
-          <div className="dialog-actions"><button type="button" disabled={pending || !receipt} onClick={reset}>Hủy ảnh và tắt camera</button><button type="button" className="primary-button" disabled={pending || samples.length !== 3 || !receipt} onClick={() => void run((signal) => mutate(false, signal))}>{status.registered ? 'Lưu đăng ký lại' : 'Lưu 3 mẫu khuôn mặt'}</button></div>
+          <div className="dialog-actions"><button type="button" disabled={pending || (!camera && samples.length === 0)} onClick={reset}>Hủy ảnh và tắt camera</button><button type="button" className="primary-button" disabled={pending || samples.length !== 3} onClick={() => void run((signal) => mutate(false, signal))}>{status.registered ? 'Lưu đăng ký lại' : 'Lưu 3 mẫu khuôn mặt'}</button></div>
         </section>
-        {status.registered && <section className="face-delete" aria-labelledby="face-delete-title"><h3 id="face-delete-title">Xóa dữ liệu khuôn mặt</h3><p>Xóa toàn bộ mẫu đặc trưng và các đồng ý liên quan. Không thể hoàn tác.</p>{confirmDelete ? <div className="dialog-actions"><button type="button" disabled={pending} onClick={() => setConfirmDelete(false)}>Giữ lại dữ liệu</button><button type="button" className="danger-button" disabled={pending} onClick={() => void run((signal) => mutate(true, signal))}>Xác nhận xóa toàn bộ</button></div> : <button type="button" disabled={pending} onClick={() => { reset(); setConfirmDelete(true) }}>Xóa dữ liệu khuôn mặt…</button>}</section>}
+        {status.registered && <section className="face-delete" aria-labelledby="face-delete-title"><h3 id="face-delete-title">Xóa dữ liệu khuôn mặt</h3><p>Xóa toàn bộ mẫu đặc trưng. Không thể hoàn tác.</p>{confirmDelete ? <div className="dialog-actions"><button type="button" disabled={pending} onClick={() => setConfirmDelete(false)}>Giữ lại dữ liệu</button><button type="button" className="danger-button" disabled={pending} onClick={() => void run((signal) => mutate(true, signal))}>Xác nhận xóa toàn bộ</button></div> : <button type="button" disabled={pending} onClick={() => { reset(); setConfirmDelete(true) }}>Xóa dữ liệu khuôn mặt…</button>}</section>}
       </>}
     </div>
   </dialog>

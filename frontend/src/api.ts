@@ -4,8 +4,7 @@ import { expiredNotice } from './session.ts'
 export type Resource = 'employees' | 'departments'
 export type EmployeeStatus = 'ACTIVE' | 'INACTIVE' | 'RESIGNED'
 export interface Employee { id: string; code: string; fullName: string; email: string; departmentId: string | null; status: EmployeeStatus; faceRegistered?: boolean; faceSampleCount?: number }
-export interface FaceStatus { employeeId: string; registered: boolean; sampleCount: number; revision: number; consentVersion: string; consentText: string }
-export interface FaceReceipt { consentToken: string; consentVersion: string; consentedAt: string; expiresAt: string }
+export interface FaceStatus { employeeId: string; registered: boolean; sampleCount: number; revision: number; enrolledAt?: string }
 export interface Department { id: string; name: string; managerId: string | null }
 export interface Entities { employees: Employee; departments: Department }
 export interface Page<T> { content: T[]; page: number; size: number; totalElements: number; totalPages: number }
@@ -18,7 +17,6 @@ export class ApiError extends Error {
 }
 const faceErrors: Record<number, string> = {
   1008: 'Dữ liệu khuôn mặt vừa thay đổi. Đã yêu cầu tải lại trạng thái.',
-  1009: 'Nội dung đồng ý đã thay đổi. Vui lòng đọc và xác nhận lại.',
   1010: 'Ảnh vượt giới hạn tải lên. Hãy chụp lại ảnh nhỏ hơn 2 MiB.',
   1011: 'Định dạng ảnh không được hỗ trợ. Hãy chụp lại ảnh JPEG.',
   1012: 'Không tìm thấy khuôn mặt. Hãy nhìn thẳng vào camera và chụp lại.',
@@ -26,7 +24,6 @@ const faceErrors: Record<number, string> = {
   1014: 'Khuôn mặt quá nhỏ. Hãy đến gần camera hơn.',
   1015: 'Ảnh bị mờ. Giữ yên và chụp lại.',
   1016: 'Ánh sáng chưa phù hợp. Hãy điều chỉnh ánh sáng và chụp lại.',
-  1017: 'Xác nhận đồng ý không còn hợp lệ. Vui lòng xác nhận lại.',
   1018: 'Dịch vụ xử lý ảnh gặp lỗi. Vui lòng thử lại sau.',
   1019: 'Dịch vụ xử lý ảnh chưa sẵn sàng. Vui lòng thử lại sau.',
   1020: 'Xử lý ảnh quá thời gian. Cần kiểm tra trạng thái trước khi thử lại.',
@@ -76,22 +73,16 @@ export function createClient(session: Session, onUnauthorized: (notice: string) 
     return data.result
   }
   function faceStatus(value: unknown, id: string): FaceStatus {
-    if (!record(value) || value.employeeId !== id || typeof value.registered !== 'boolean' || !['sampleCount', 'revision'].every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) || typeof value.consentVersion !== 'string' || !value.consentVersion.trim() || typeof value.consentText !== 'string' || !value.consentText.trim() || (value.registered ? value.sampleCount !== 3 : value.sampleCount !== 0)) throw invalid()
+    if (!record(value) || value.employeeId !== id || typeof value.registered !== 'boolean' || !['sampleCount', 'revision'].every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) || (value.enrolledAt !== undefined && (typeof value.enrolledAt !== 'string' || !Number.isFinite(Date.parse(value.enrolledAt)))) || (value.registered ? value.sampleCount !== 3 : value.sampleCount !== 0)) throw invalid()
     return value as unknown as FaceStatus
   }
   const facePath = (id: string) => `employees/${encodeURIComponent(id)}/face`
   return {
     async faceStatus(id: string, signal?: AbortSignal) { return faceStatus(await request(facePath(id), 'GET', signal), id) },
-    async faceConsent(id: string, consentVersion: string, expectedRevision: number, signal?: AbortSignal): Promise<FaceReceipt> {
-      const value = await request(`${facePath(id)}/consent`, 'POST', signal, { accepted: true, consentVersion, expectedRevision })
-      if (!record(value) || typeof value.consentToken !== 'string' || !value.consentToken || value.consentVersion !== consentVersion || typeof value.consentedAt !== 'string' || !Number.isFinite(Date.parse(value.consentedAt)) || typeof value.expiresAt !== 'string' || !(Date.parse(value.expiresAt) > Date.now())) throw invalid()
-      return value as unknown as FaceReceipt
-    },
-    async enrollFace(id: string, images: Blob[], consentToken: string, expectedRevision: number, signal?: AbortSignal) {
-      if (images.length !== 3 || images.some((image) => image.type !== 'image/jpeg' || image.size === 0 || image.size > 2 * 1024 * 1024) || !consentToken || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new ApiError('Cần đúng 3 ảnh JPEG, mỗi ảnh tối đa 2 MiB và xác nhận đồng ý hợp lệ.', 400)
+    async enrollFace(id: string, images: Blob[], expectedRevision: number, signal?: AbortSignal) {
+      if (images.length !== 3 || images.some((image) => image.type !== 'image/jpeg' || image.size === 0 || image.size > 2 * 1024 * 1024) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new ApiError('Cần đúng 3 ảnh JPEG, mỗi ảnh tối đa 2 MiB và phiên bản dữ liệu hợp lệ.', 400)
       const body = new FormData()
       images.forEach((image, index) => body.append('images', image, `sample-${index + 1}.jpg`))
-      body.append('consentToken', consentToken)
       body.append('expectedRevision', String(expectedRevision))
       return faceStatus(await request(facePath(id), 'PUT', signal, body, false, 45000), id)
     },

@@ -1,6 +1,5 @@
 package com.pandora.coreservice.service;
 
-import com.pandora.coreservice.dto.FaceConsentReceipt;
 import com.pandora.coreservice.dto.FaceEmbeddingResult;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
 import com.pandora.coreservice.entity.Employee;
@@ -28,17 +27,13 @@ public class FaceEnrollmentTransactionService {
     private final EmployeeRepository employeeRepository;
     private final EmployeeFaceEnrollmentRepository employeeFaceEnrollmentRepository;
     private final EmployeeFaceSampleRepository employeeFaceSampleRepository;
-    private final FaceConsentService faceConsentService;
 
     @Transactional
     public FaceEnrollmentResponse executeEnrollment(
             UUID employeeId,
             UUID adminId,
-            String consentToken,
             Long expectedRevision,
-            List<FaceEmbeddingResult> embeddingResults,
-            String canonicalConsentText,
-            String canonicalConsentVersion) {
+            List<FaceEmbeddingResult> embeddingResults) {
 
         validateEmbeddingResults(embeddingResults);
 
@@ -53,10 +48,6 @@ public class FaceEnrollmentTransactionService {
             throw new AppException(ErrorCode.STALE_REVISION);
         }
 
-        FaceConsentReceipt receipt = faceConsentService.verifyConsentReceipt(
-                consentToken, employeeId, adminId, employee.getFaceRevision()
-        );
-
         Optional<EmployeeFaceEnrollment> existingOpt = employeeFaceEnrollmentRepository.findByEmployeeId(employeeId);
         if (existingOpt.isPresent()) {
             EmployeeFaceEnrollment existing = existingOpt.get();
@@ -70,10 +61,7 @@ public class FaceEnrollmentTransactionService {
         EmployeeFaceEnrollment enrollment = new EmployeeFaceEnrollment();
         enrollment.setEmployeeId(employeeId);
         enrollment.setEnrolledAt(now);
-        enrollment.setConsentedAt(receipt.getConsentedAt());
-        enrollment.setConsentedByAdminId(receipt.getAdminId());
-        enrollment.setConsentVersion(receipt.getConsentVersion());
-        enrollment.setConsentText(canonicalConsentText != null ? canonicalConsentText : faceConsentService.getConsentText());
+        enrollment.setEnrolledByAdminId(adminId);
 
         FaceEmbeddingResult first = embeddingResults.get(0);
         String modelId = first.getModelId();
@@ -120,21 +108,14 @@ public class FaceEnrollmentTransactionService {
                 .registered(true)
                 .sampleCount(saved.getSampleCount())
                 .revision(employee.getFaceRevision())
-                .consentVersion(canonicalConsentVersion != null ? canonicalConsentVersion : faceConsentService.getConsentVersion())
-                .consentText(canonicalConsentText != null ? canonicalConsentText : faceConsentService.getConsentText())
                 .enrolledAt(saved.getEnrolledAt())
-                .consentedAt(saved.getConsentedAt())
-                .consentedByAdminId(saved.getConsentedByAdminId())
-                .acceptedConsentVersion(saved.getConsentVersion())
                 .build();
     }
 
     @Transactional
     public FaceEnrollmentResponse executeDelete(
             UUID employeeId,
-            Long expectedRevision,
-            String canonicalConsentText,
-            String canonicalConsentVersion) {
+            Long expectedRevision) {
 
         if (expectedRevision == null || expectedRevision < 0) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
@@ -164,12 +145,7 @@ public class FaceEnrollmentTransactionService {
                 .registered(false)
                 .sampleCount(0)
                 .revision(employee.getFaceRevision())
-                .consentVersion(canonicalConsentVersion != null ? canonicalConsentVersion : faceConsentService.getConsentVersion())
-                .consentText(canonicalConsentText != null ? canonicalConsentText : faceConsentService.getConsentText())
                 .enrolledAt(null)
-                .consentedAt(null)
-                .consentedByAdminId(null)
-                .acceptedConsentVersion(null)
                 .build();
     }
 

@@ -7,13 +7,12 @@ Solips face enrollment processes 3 facial image samples per employee via `face-s
 - **No Liveness / Prototype Disclaimer**: No active/passive anti-spoofing or liveness detection is implemented; accepts static 2D images. Not certified for production or high-security authentication.
 
 ## 2. Environment Variables & Secret Separation
-The consent token signing key and internal service auth key are strictly separated and must never be shared.
+The internal service auth key protects communication between `core-service` and `face-service`.
 
 | Variable Name | Configuration Property | Default | Purpose |
 |---|---|---|---|
 | `FACE_SERVICE_URL` | `face.service.url` | `http://localhost:8001` | Upstream Python `face-service` endpoint URL |
 | `FACE_SERVICE_SECRET` | `face.service.secret` | `""` | Internal auth header `X-Internal-Service-Key` / Bearer |
-| `FACE_CONSENT_SECRET` | `face.consent.secret` | `""` | HS256 JWT signing secret for consent receipts (min 32 bytes) |
 | `FACE_EXPECTED_MODEL_VERSION` | `face.service.expected-model-version` | `""` | Pinned SHA-256 hash of model artifact (`w600k_r50.onnx`) |
 | `FACE_SERVICE_CONNECT_TIMEOUT_MILLIS` | `face.service.connect-timeout-millis` | `3000` | HTTP connect timeout (ms) |
 | `FACE_SERVICE_READ_TIMEOUT_MILLIS` | `face.service.read-timeout-millis` | `15000` | HTTP read/inference timeout (ms) |
@@ -26,6 +25,7 @@ The consent token signing key and internal service auth key are strictly separat
 ## 4. MySQL Manual Migration Prerequisites (No Execute)
 Apply manually to MySQL; do not rely on Hibernate `ddl-auto: update`.
 
+### 4.1 Fresh Schema Setup (Consent-Free)
 ```sql
 -- 1. Add revision column and backfill existing employees
 ALTER TABLE employees ADD COLUMN face_revision BIGINT NOT NULL DEFAULT 0;
@@ -36,10 +36,7 @@ CREATE TABLE employee_face_enrollments (
     id BINARY(16) PRIMARY KEY,
     employee_id BINARY(16) NOT NULL UNIQUE,
     enrolled_at DATETIME(6) NOT NULL,
-    consented_at DATETIME(6) NOT NULL,
-    consented_by_admin_id BINARY(16) NOT NULL,
-    consent_version VARCHAR(64) NOT NULL,
-    consent_text TEXT NOT NULL,
+    enrolled_by_admin_id BINARY(16) NULL,
     model_id VARCHAR(64) NOT NULL,
     model_version VARCHAR(128) NOT NULL,
     preprocessing_version VARCHAR(64) NOT NULL,
@@ -69,6 +66,27 @@ CREATE TABLE employee_face_samples (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
+### 4.2 Compatibility Migration for Existing Deployments (Preserving Historical Data & Samples)
+To upgrade existing databases that already have consent columns, preserve existing samples and historical consent data without dropping records:
+```sql
+-- Make legacy consent columns nullable (preserves historical consent data in-place)
+ALTER TABLE employee_face_enrollments
+    MODIFY COLUMN consented_at DATETIME(6) NULL,
+    MODIFY COLUMN consented_by_admin_id BINARY(16) NULL,
+    MODIFY COLUMN consent_version VARCHAR(64) NULL,
+    MODIFY COLUMN consent_text TEXT NULL;
+
+-- Add actual enrolling admin actor column if not already present
+ALTER TABLE employee_face_enrollments
+    ADD COLUMN enrolled_by_admin_id BINARY(16) NULL;
+
+-- Optional backfill of enrolled_by_admin_id from historical consented_by_admin_id
+UPDATE employee_face_enrollments
+    SET enrolled_by_admin_id = consented_by_admin_id
+    WHERE enrolled_by_admin_id IS NULL AND consented_by_admin_id IS NOT NULL;
+```
+
 ## 5. Verification Status & Test Suite
-- **Automated Tests**: Backend 79 tests passing, Frontend 75 tests passing, Python 24 tests passing earlier.
+- **Automated Tests**: Backend 84 tests passing (including 5 focused `FaceConfigurationTest` regression tests verifying Spring Boot 4 modular `spring-boot-starter-restclient` auto-configuration and `faceRestClient` wiring), Frontend 75 tests passing, Python 24 tests passing earlier.
+- **Modular Client Dependency**: Spring Boot 4 requires `spring-boot-starter-restclient` to auto-configure `RestClient.Builder` injected into `FaceConfiguration` and `FaceServiceClient`.
 - **Unverified Real Integrations**: Live browser webcam feed capture / UX and real MySQL persistence / concurrency remain unverified against live instances.

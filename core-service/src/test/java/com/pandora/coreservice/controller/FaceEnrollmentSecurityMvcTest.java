@@ -1,7 +1,6 @@
 package com.pandora.coreservice.controller;
 
 import com.pandora.coreservice.config.SecurityConfig;
-import com.pandora.coreservice.dto.FaceConsentResponse;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
 import com.pandora.coreservice.entity.Role;
@@ -35,7 +34,6 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -95,10 +93,6 @@ class FaceEnrollmentSecurityMvcTest {
         legacyRolelessToken = jwtEncoder.encode(JwtEncoderParameters.from(header, legacyClaims)).getTokenValue();
     }
 
-    private static String validConsentJson() {
-        return "{\"accepted\":true,\"consentVersion\":\"face-enrollment-v1\",\"expectedRevision\":0}";
-    }
-
     private static String validDeleteJson() {
         return "{\"expectedRevision\":0}";
     }
@@ -118,25 +112,13 @@ class FaceEnrollmentSecurityMvcTest {
     }
 
     @Test
-    @DisplayName("Anonymous POST /api/employees/{id}/face/consent returns 401 UNAUTHENTICATED")
-    void testPostConsentAnonymous() throws Exception {
-        mockMvc.perform(post("/api/employees/{id}/face/consent", sampleEmployeeId)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validConsentJson()))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code", equalTo(1002)));
-
-        verifyNoInteractions(faceEnrollmentService);
-    }
-
-    @Test
     @DisplayName("Anonymous PUT /api/employees/{id}/face multipart returns 401 UNAUTHENTICATED")
     void testPutEnrollMultipartAnonymous() throws Exception {
         MockMultipartFile file1 = new MockMultipartFile("images", "1.jpg", "image/jpeg", new byte[]{1, 2});
 
         mockMvc.perform(multipart(HttpMethod.PUT, "/api/employees/{id}/face", sampleEmployeeId)
                         .file(file1)
-                        .param("consentToken", "sample-token"))
+                        .param("expectedRevision", "0"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code", equalTo(1002)));
 
@@ -170,20 +152,6 @@ class FaceEnrollmentSecurityMvcTest {
     }
 
     @Test
-    @DisplayName("Non-Admin roles receive 403 ACCESS_DENIED on POST consent")
-    void testPostConsentNonAdminRolesForbidden() throws Exception {
-        for (String token : new String[]{managerToken, employeeToken, legacyRolelessToken}) {
-            mockMvc.perform(post("/api/employees/{id}/face/consent", sampleEmployeeId)
-                            .header("Authorization", "Bearer " + token)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(validConsentJson()))
-                    .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.code", equalTo(1003)));
-        }
-        verifyNoInteractions(faceEnrollmentService);
-    }
-
-    @Test
     @DisplayName("Non-Admin roles receive 403 ACCESS_DENIED on PUT multipart enrollment")
     void testPutEnrollMultipartNonAdminRolesForbidden() throws Exception {
         MockMultipartFile file = new MockMultipartFile("images", "1.jpg", "image/jpeg", new byte[]{1, 2});
@@ -191,7 +159,7 @@ class FaceEnrollmentSecurityMvcTest {
         for (String token : new String[]{managerToken, employeeToken, legacyRolelessToken}) {
             mockMvc.perform(multipart(HttpMethod.PUT, "/api/employees/{id}/face", sampleEmployeeId)
                             .file(file)
-                            .param("consentToken", "sample-token")
+                            .param("expectedRevision", "0")
                             .header("Authorization", "Bearer " + token))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.code", equalTo(1003)));
@@ -223,12 +191,7 @@ class FaceEnrollmentSecurityMvcTest {
                 .registered(true)
                 .sampleCount(3)
                 .revision(1L)
-                .consentVersion("face-enrollment-v1")
-                .consentText("Consent text")
                 .enrolledAt(Instant.now())
-                .consentedAt(Instant.now())
-                .consentedByAdminId(adminUserId)
-                .acceptedConsentVersion("face-enrollment-v1")
                 .build();
 
         when(faceEnrollmentService.getStatus(sampleEmployeeId)).thenReturn(mockResponse);
@@ -247,45 +210,6 @@ class FaceEnrollmentSecurityMvcTest {
     }
 
     @Test
-    @DisplayName("Signed Admin auth successfully issues consent with 200 and Cache-Control no-store")
-    void testPostConsentAdminSuccess() throws Exception {
-        FaceConsentResponse mockConsentResponse = FaceConsentResponse.builder()
-                .consentToken("mocked-consent-token")
-                .consentVersion("face-enrollment-v1")
-                .consentedAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(600))
-                .build();
-
-        when(faceEnrollmentService.issueConsent(eq(sampleEmployeeId), eq(adminUserId), any()))
-                .thenReturn(mockConsentResponse);
-
-        mockMvc.perform(post("/api/employees/{id}/face/consent", sampleEmployeeId)
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(validConsentJson()))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Cache-Control", containsString("no-store")))
-                .andExpect(jsonPath("$.code", equalTo(1000)))
-                .andExpect(jsonPath("$.result.consentToken", equalTo("mocked-consent-token")))
-                .andExpect(jsonPath("$.result.consentVersion", equalTo("face-enrollment-v1")));
-
-        verify(faceEnrollmentService).issueConsent(eq(sampleEmployeeId), eq(adminUserId), any());
-    }
-
-    @Test
-    @DisplayName("Admin POST consent with invalid body (null accepted) returns 400 INVALID_REQUEST")
-    void testPostConsentAdminInvalidBodyBadRequest() throws Exception {
-        mockMvc.perform(post("/api/employees/{id}/face/consent", sampleEmployeeId)
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"consentVersion\":\"face-enrollment-v1\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code", equalTo(1004)));
-
-        verifyNoInteractions(faceEnrollmentService);
-    }
-
-    @Test
     @DisplayName("Signed Admin auth successfully enrolls with 3 multipart images and returns 200 with Cache-Control no-store")
     void testPutEnrollMultipartAdminSuccess() throws Exception {
         MockMultipartFile file1 = new MockMultipartFile("images", "img1.jpg", "image/jpeg", new byte[]{1, 2, 3});
@@ -299,14 +223,13 @@ class FaceEnrollmentSecurityMvcTest {
                 .revision(1L)
                 .build();
 
-        when(faceEnrollmentService.enroll(eq(sampleEmployeeId), eq(adminUserId), anyList(), eq("token-xyz"), eq(0L)))
+        when(faceEnrollmentService.enroll(eq(sampleEmployeeId), eq(adminUserId), anyList(), eq(0L)))
                 .thenReturn(mockResponse);
 
         mockMvc.perform(multipart(HttpMethod.PUT, "/api/employees/{id}/face", sampleEmployeeId)
                         .file(file1)
                         .file(file2)
                         .file(file3)
-                        .param("consentToken", "token-xyz")
                         .param("expectedRevision", "0")
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
@@ -315,7 +238,7 @@ class FaceEnrollmentSecurityMvcTest {
                 .andExpect(jsonPath("$.result.registered", equalTo(true)))
                 .andExpect(jsonPath("$.result.sampleCount", equalTo(3)));
 
-        verify(faceEnrollmentService).enroll(eq(sampleEmployeeId), eq(adminUserId), anyList(), eq("token-xyz"), eq(0L));
+        verify(faceEnrollmentService).enroll(eq(sampleEmployeeId), eq(adminUserId), anyList(), eq(0L));
     }
 
     @Test
@@ -327,7 +250,21 @@ class FaceEnrollmentSecurityMvcTest {
         mockMvc.perform(multipart(HttpMethod.PUT, "/api/employees/{id}/face", sampleEmployeeId)
                         .file(file1)
                         .file(extraneous)
-                        .param("consentToken", "token-xyz")
+                        .param("expectedRevision", "0")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code", equalTo(1004)));
+
+        verifyNoInteractions(faceEnrollmentService);
+    }
+
+    @Test
+    @DisplayName("Admin PUT enroll without expectedRevision returns 400 INVALID_REQUEST")
+    void testPutEnrollMissingExpectedRevisionBadRequest() throws Exception {
+        MockMultipartFile file1 = new MockMultipartFile("images", "img1.jpg", "image/jpeg", new byte[]{1, 2});
+
+        mockMvc.perform(multipart(HttpMethod.PUT, "/api/employees/{id}/face", sampleEmployeeId)
+                        .file(file1)
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code", equalTo(1004)));

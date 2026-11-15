@@ -1,8 +1,6 @@
 package com.pandora.coreservice.service;
 
 import com.pandora.coreservice.config.FaceProperties;
-import com.pandora.coreservice.dto.FaceConsentRequest;
-import com.pandora.coreservice.dto.FaceConsentResponse;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEmbeddingResult;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
@@ -37,7 +35,6 @@ public class FaceEnrollmentService {
 
     private final EmployeeRepository employeeRepository;
     private final EmployeeFaceEnrollmentRepository employeeFaceEnrollmentRepository;
-    private final FaceConsentService faceConsentService;
     private final FaceServiceClient faceServiceClient;
     private final FaceProperties faceProperties;
     private final FaceEnrollmentTransactionService faceEnrollmentTransactionService;
@@ -51,9 +48,6 @@ public class FaceEnrollmentService {
         Employee employee = employeeRepository.findByIdAndDeletedAtIsNull(employeeId)
                 .orElseThrow(() -> new AppException(ErrorCode.RESOURCE_NOT_FOUND));
 
-        String canonicalConsentVersion = faceConsentService.getConsentVersion();
-        String canonicalConsentText = faceConsentService.getConsentText();
-
         Optional<EmployeeFaceEnrollment> enrollmentOpt = employeeFaceEnrollmentRepository.findByEmployeeId(employeeId);
         if (enrollmentOpt.isPresent()) {
             EmployeeFaceEnrollment enrollment = enrollmentOpt.get();
@@ -62,12 +56,7 @@ public class FaceEnrollmentService {
                     .registered(true)
                     .sampleCount(enrollment.getSampleCount())
                     .revision(employee.getFaceRevision())
-                    .consentVersion(canonicalConsentVersion)
-                    .consentText(canonicalConsentText)
                     .enrolledAt(enrollment.getEnrolledAt())
-                    .consentedAt(enrollment.getConsentedAt())
-                    .consentedByAdminId(enrollment.getConsentedByAdminId())
-                    .acceptedConsentVersion(enrollment.getConsentVersion())
                     .build();
         }
 
@@ -76,39 +65,18 @@ public class FaceEnrollmentService {
                 .registered(false)
                 .sampleCount(0)
                 .revision(employee.getFaceRevision())
-                .consentVersion(canonicalConsentVersion)
-                .consentText(canonicalConsentText)
                 .enrolledAt(null)
-                .consentedAt(null)
-                .consentedByAdminId(null)
-                .acceptedConsentVersion(null)
                 .build();
-    }
-
-    @Transactional(readOnly = true)
-    public FaceConsentResponse issueConsent(UUID employeeId, UUID adminId, FaceConsentRequest request) {
-        if (employeeId == null || adminId == null) {
-            throw new AppException(ErrorCode.INVALID_REQUEST);
-        }
-
-        Employee employee = employeeRepository.findByIdAndDeletedAtIsNull(employeeId)
-                .orElseThrow(() -> new AppException(ErrorCode.RESOURCE_NOT_FOUND));
-
-        return faceConsentService.issueConsent(employeeId, adminId, employee.getFaceRevision(), request);
     }
 
     public FaceEnrollmentResponse enroll(
             UUID employeeId,
             UUID adminId,
             List<MultipartFile> images,
-            String consentToken,
             Long expectedRevision) {
 
         if (employeeId == null || adminId == null || expectedRevision == null || expectedRevision < 0) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
-        }
-        if (consentToken == null || consentToken.isBlank()) {
-            throw new AppException(ErrorCode.INVALID_CONSENT);
         }
         if (images == null || images.size() != REQUIRED_SAMPLE_COUNT) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
@@ -123,8 +91,6 @@ public class FaceEnrollmentService {
             throw new AppException(ErrorCode.STALE_REVISION);
         }
 
-        faceConsentService.verifyConsentReceipt(consentToken, employeeId, adminId, employee.getFaceRevision());
-
         List<FaceEmbeddingResult> embeddingResults = new ArrayList<>(images.size());
         for (MultipartFile file : images) {
             FaceEmbeddingResult result = faceServiceClient.embedEnrollmentImage(file);
@@ -134,11 +100,8 @@ public class FaceEnrollmentService {
         return faceEnrollmentTransactionService.executeEnrollment(
                 employeeId,
                 adminId,
-                consentToken,
                 expectedRevision,
-                embeddingResults,
-                faceConsentService.getConsentText(),
-                faceConsentService.getConsentVersion()
+                embeddingResults
         );
     }
 
@@ -146,10 +109,9 @@ public class FaceEnrollmentService {
             UUID employeeId,
             UUID adminId,
             MultipartFile[] images,
-            String consentToken,
             Long expectedRevision) {
         List<MultipartFile> list = images != null ? Arrays.asList(images) : null;
-        return enroll(employeeId, adminId, list, consentToken, expectedRevision);
+        return enroll(employeeId, adminId, list, expectedRevision);
     }
 
     public FaceEnrollmentResponse delete(UUID employeeId, Long revision) {
@@ -158,9 +120,7 @@ public class FaceEnrollmentService {
         }
         return faceEnrollmentTransactionService.executeDelete(
                 employeeId,
-                revision,
-                faceConsentService.getConsentText(),
-                faceConsentService.getConsentVersion()
+                revision
         );
     }
 
