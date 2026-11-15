@@ -5,6 +5,19 @@ export type Resource = 'employees' | 'departments'
 export type EmployeeStatus = 'ACTIVE' | 'INACTIVE' | 'RESIGNED'
 export interface Employee { id: string; code: string; fullName: string; email: string; departmentId: string | null; status: EmployeeStatus; faceRegistered?: boolean; faceSampleCount?: number }
 export interface FaceStatus { employeeId: string; registered: boolean; sampleCount: number; revision: number; enrolledAt?: string }
+export interface FaceQuality {
+  imageWidth: number; imageHeight: number
+  faceBox: { x: number; y: number; width: number; height: number }
+  quality: { detScore: number; faceWidth: number; faceHeight: number; faceAreaRatio: number; laplacianVar: number; meanBrightness: number }
+}
+export function parseFaceQuality(value: unknown): FaceQuality {
+  if (!record(value) || !['imageWidth', 'imageHeight'].every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) > 0) || !record(value.faceBox) || !record(value.quality)) throw invalid()
+  const box = value.faceBox, quality = value.quality
+  const finite = (item: unknown): item is number => typeof item === 'number' && Number.isFinite(item)
+  if (!['x', 'y', 'width', 'height'].every((key) => finite(box[key])) || Number(box.x) < 0 || Number(box.y) < 0 || Number(box.width) <= 0 || Number(box.height) <= 0 || Number(box.x) + Number(box.width) > 1 || Number(box.y) + Number(box.height) > 1) throw invalid()
+  if (!['detScore', 'faceWidth', 'faceHeight', 'faceAreaRatio', 'laplacianVar', 'meanBrightness'].every((key) => finite(quality[key]) && Number(quality[key]) >= 0) || Number(quality.detScore) > 1 || Number(quality.faceAreaRatio) > 1 || Number(quality.faceWidth) <= 0 || Number(quality.faceHeight) <= 0 || Number(quality.meanBrightness) > 255) throw invalid()
+  return value as unknown as FaceQuality
+}
 export interface Department { id: string; name: string; managerId: string | null }
 export interface Entities { employees: Employee; departments: Department }
 export interface Page<T> { content: T[]; page: number; size: number; totalElements: number; totalPages: number }
@@ -79,6 +92,12 @@ export function createClient(session: Session, onUnauthorized: (notice: string) 
   const facePath = (id: string) => `employees/${encodeURIComponent(id)}/face`
   return {
     async faceStatus(id: string, signal?: AbortSignal) { return faceStatus(await request(facePath(id), 'GET', signal), id) },
+    async faceQuality(id: string, image: Blob, signal?: AbortSignal) {
+      if (image.type !== 'image/jpeg' || !image.size || image.size > 2 * 1024 * 1024) throw new ApiError('Cần ảnh JPEG tối đa 2 MiB.', 400)
+      const body = new FormData()
+      body.append('image', image, 'probe.jpg')
+      return parseFaceQuality(await request(`${facePath(id)}/quality`, 'POST', signal, body, false, 20000))
+    },
     async enrollFace(id: string, images: Blob[], expectedRevision: number, signal?: AbortSignal) {
       if (images.length !== 3 || images.some((image) => image.type !== 'image/jpeg' || image.size === 0 || image.size > 2 * 1024 * 1024) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new ApiError('Cần đúng 3 ảnh JPEG, mỗi ảnh tối đa 2 MiB và phiên bản dữ liệu hợp lệ.', 400)
       const body = new FormData()

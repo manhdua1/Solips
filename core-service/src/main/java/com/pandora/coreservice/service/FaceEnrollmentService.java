@@ -4,6 +4,7 @@ import com.pandora.coreservice.config.FaceProperties;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEmbeddingResult;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
+import com.pandora.coreservice.dto.FaceQualityCheckResponse;
 import com.pandora.coreservice.entity.Employee;
 import com.pandora.coreservice.entity.EmployeeFaceEnrollment;
 import com.pandora.coreservice.exception.AppException;
@@ -129,6 +130,44 @@ public class FaceEnrollmentService {
             throw new AppException(ErrorCode.INVALID_REQUEST);
         }
         return delete(employeeId, request.getExpectedRevision());
+    }
+
+    public FaceQualityCheckResponse checkQuality(UUID employeeId, MultipartFile image) {
+        if (employeeId == null) {
+            throw new AppException(ErrorCode.INVALID_REQUEST);
+        }
+        if (image == null || image.isEmpty()) {
+            throw new AppException(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        validateSingleImage(image);
+
+        // Verify employee exists and not deleted
+        employeeRepository.findByIdAndDeletedAtIsNull(employeeId)
+                .orElseThrow(() -> new AppException(ErrorCode.RESOURCE_NOT_FOUND));
+
+        // Note: No transaction held over inference; probe never persists or extracts embeddings
+        return faceServiceClient.checkFaceQuality(image);
+    }
+
+    private void validateSingleImage(MultipartFile file) {
+        long maxBytes = 2 * 1024 * 1024L;
+        if (faceProperties != null && faceProperties.getImage() != null
+                && faceProperties.getImage().getMaxBytes() > 0) {
+            maxBytes = faceProperties.getImage().getMaxBytes();
+        }
+
+        if (file.getSize() > maxBytes) {
+            throw new AppException(ErrorCode.UPLOAD_TOO_LARGE);
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || contentType.isBlank()) {
+            throw new AppException(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+        }
+        String normalizedType = contentType.toLowerCase().split(";")[0].trim();
+        if (!ALLOWED_CONTENT_TYPES.contains(normalizedType)) {
+            throw new AppException(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+        }
     }
 
     private void validateImages(List<MultipartFile> images) {

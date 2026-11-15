@@ -145,6 +145,40 @@
   box-sizing: border-box;
 }
 
+.kiosk-recognition {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffefa;
+  overflow-wrap: anywhere;
+}
+
+.kiosk-recognition-message {
+  margin: 0;
+  font-weight: 600;
+  text-wrap: pretty;
+}
+
+.kiosk-recognition--success {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.kiosk-demo-notice {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink);
+  text-wrap: pretty;
+}
+
+.kiosk-recognition .kiosk-retry-btn {
+  margin-top: 12px;
+}
+
 /* Status announcement strip */
 .kiosk-status-strip {
   display: inline-flex;

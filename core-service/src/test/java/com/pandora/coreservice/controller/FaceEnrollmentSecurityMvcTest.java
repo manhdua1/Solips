@@ -3,6 +3,9 @@ package com.pandora.coreservice.controller;
 import com.pandora.coreservice.config.SecurityConfig;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
+import com.pandora.coreservice.dto.FaceQualityCheckResponse;
+import com.pandora.coreservice.dto.FaceBoxDto;
+import com.pandora.coreservice.dto.FaceQualityDto;
 import com.pandora.coreservice.entity.Role;
 import com.pandora.coreservice.entity.User;
 import com.pandora.coreservice.exception.GlobalExceptionHandler;
@@ -300,6 +303,102 @@ class FaceEnrollmentSecurityMvcTest {
     @DisplayName("Admin DELETE without request body returns 400 INVALID_REQUEST and makes no service call")
     void testDeleteAdminWithoutBodyBadRequest() throws Exception {
         mockMvc.perform(delete("/api/employees/{id}/face", sampleEmployeeId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code", equalTo(1004)));
+
+        verifyNoInteractions(faceEnrollmentService);
+    }
+
+    // =========================================================================
+    // 4. FACE QUALITY PROBE ENDPOINT TESTS
+    // =========================================================================
+
+    @Test
+    @DisplayName("Anonymous POST /api/employees/{id}/face/quality returns 401 UNAUTHENTICATED")
+    void testCheckQualityAnonymous() throws Exception {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+
+        mockMvc.perform(multipart(HttpMethod.POST, "/api/employees/{id}/face/quality", sampleEmployeeId)
+                        .file(image))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code", equalTo(1002)));
+
+        verifyNoInteractions(faceEnrollmentService);
+    }
+
+    @Test
+    @DisplayName("Non-Admin roles receive 403 ACCESS_DENIED on POST quality")
+    void testCheckQualityNonAdminRolesForbidden() throws Exception {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+
+        for (String token : new String[]{managerToken, employeeToken, legacyRolelessToken}) {
+            mockMvc.perform(multipart(HttpMethod.POST, "/api/employees/{id}/face/quality", sampleEmployeeId)
+                            .file(image)
+                            .header("Authorization", "Bearer " + token))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code", equalTo(1003)));
+        }
+        verifyNoInteractions(faceEnrollmentService);
+    }
+
+    @Test
+    @DisplayName("Signed Admin POST quality succeeds with 200, code 1000, and Cache-Control no-store")
+    void testCheckQualityAdminSuccess() throws Exception {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+
+        FaceQualityCheckResponse mockResponse = FaceQualityCheckResponse.builder()
+                .imageWidth(1280)
+                .imageHeight(720)
+                .faceBox(FaceBoxDto.builder()
+                        .x(0.3)
+                        .y(0.2)
+                        .width(0.3)
+                        .height(0.5)
+                        .build())
+                .quality(FaceQualityDto.builder()
+                        .detScore(0.99f)
+                        .faceWidth(384)
+                        .faceHeight(360)
+                        .faceAreaRatio(0.15f)
+                        .laplacianVar(150.0f)
+                        .meanBrightness(120.0f)
+                        .build())
+                .build();
+
+        when(faceEnrollmentService.checkQuality(eq(sampleEmployeeId), any())).thenReturn(mockResponse);
+
+        mockMvc.perform(multipart(HttpMethod.POST, "/api/employees/{id}/face/quality", sampleEmployeeId)
+                        .file(image)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", containsString("no-store")))
+                .andExpect(jsonPath("$.code", equalTo(1000)))
+                .andExpect(jsonPath("$.result.imageWidth", equalTo(1280)))
+                .andExpect(jsonPath("$.result.imageHeight", equalTo(720)))
+                .andExpect(jsonPath("$.result.faceBox.x", equalTo(0.3)))
+                .andExpect(jsonPath("$.result.faceBox.y", equalTo(0.2)))
+                .andExpect(jsonPath("$.result.faceBox.width", equalTo(0.3)))
+                .andExpect(jsonPath("$.result.faceBox.height", equalTo(0.5)))
+                .andExpect(jsonPath("$.result.quality.detScore", equalTo(0.99)))
+                .andExpect(jsonPath("$.result.quality.faceWidth", equalTo(384)))
+                .andExpect(jsonPath("$.result.quality.faceHeight", equalTo(360)))
+                .andExpect(jsonPath("$.result.quality.faceAreaRatio", equalTo(0.15)))
+                .andExpect(jsonPath("$.result.quality.laplacianVar", equalTo(150.0)))
+                .andExpect(jsonPath("$.result.quality.meanBrightness", equalTo(120.0)));
+
+        verify(faceEnrollmentService).checkQuality(eq(sampleEmployeeId), any());
+    }
+
+    @Test
+    @DisplayName("Admin POST quality with unexpected multipart part is rejected with 400 INVALID_REQUEST")
+    void testCheckQualityExtraFilePartRejected() throws Exception {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2});
+        MockMultipartFile extra = new MockMultipartFile("extra", "extra.jpg", "image/jpeg", new byte[]{3, 4});
+
+        mockMvc.perform(multipart(HttpMethod.POST, "/api/employees/{id}/face/quality", sampleEmployeeId)
+                        .file(image)
+                        .file(extra)
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code", equalTo(1004)));

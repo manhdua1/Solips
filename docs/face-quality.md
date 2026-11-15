@@ -18,15 +18,20 @@ It uses InsightFace (`buffalo_l` model pack) with an ArcFace/ResNet50 backbone p
 
 Internal API calls from `core-service` to `face-service` are authenticated using a shared secret.
 
-### Configuration
+### Configuration & Loading
 - Environment variable: `FACE_SERVICE_SECRET`
+- Stored in the git-ignored repository-root `.env` file shared between `core-service` and `face-service`.
+- On startup, `face-service` dynamically resolves and loads candidate `.env` files matching Spring Boot configuration import precedence (CWD, parent, service directory, repository root).
+- Environment variables already present in the OS environment take precedence (`override=False`).
 - If `FACE_SERVICE_SECRET` is set and non-empty, every call to `/detect`, `/embed`, and `/enrollment/embed` must provide either:
   1. Header `X-Internal-Service-Key: <secret>`
   2. Header `Authorization: Bearer <secret>`
 - If the secret is omitted or mismatched:
   - HTTP `401 Unauthorized`
   - Response body: `{"detail": "UNAUTHORIZED"}`
-- If `FACE_SERVICE_SECRET` is empty/unset, authentication is bypassed (for local development).
+- **Fail-Closed Protection**:
+  - For `POST /enrollment/embed`, `require_secret=True` is strictly enforced. If `FACE_SERVICE_SECRET` is missing or empty, it fails closed with HTTP `503 Service Unavailable` (`{"detail": "CONFIG_UNAVAILABLE"}`).
+  - For legacy `/detect` and `/embed` endpoints, calls are allowed without auth only when `FACE_SERVICE_SECRET` is empty/unset (for local offline dev/tests).
 
 ---
 
@@ -152,6 +157,65 @@ When calling `POST /enrollment/embed`, the image must pass all of the following 
 }
 ```
 
+### 5.5 Enrollment Quality Probe (Detection-Only Endpoint)
+- **Path**: `POST /enrollment/quality`
+- **Auth**: Service auth (`require_secret=True`)
+- **Form Data**: `file` (binary image with explicit MIME: JPEG or PNG)
+- **Behavior**: Uses detection-only face inference without extracting 512-dim feature embeddings, ensuring fast and bounded periodic quality checks for guided auto enrollment. Shares identical scalar quality thresholds (one face, size, blur, illumination) with `/enrollment/embed`.
+- **Success Response**: `200 OK`
+```json
+{
+  "imageWidth": 1280,
+  "imageHeight": 720,
+  "faceBox": {
+    "x": 0.3,
+    "y": 0.2,
+    "width": 0.3,
+    "height": 0.5
+  },
+  "quality": {
+    "detScore": 0.9985,
+    "faceWidth": 384,
+    "faceHeight": 360,
+    "faceAreaRatio": 0.15,
+    "laplacianVar": 182.4,
+    "meanBrightness": 128.5
+  }
+}
+```
+
+### 5.6 Core Service Guided Auto Enrollment Endpoint
+- **Path**: `POST /api/employees/{id}/face/quality`
+- **Auth**: Admin Bearer JWT (`ROLE_Admin`)
+- **Form Data**: `image` (exactly one multipart file)
+- **Headers**: `Cache-Control: no-store`
+- **Behavior**: Verifies employee existence and active status. Does NOT hold open database transactions over inference. Never extracts or persists embeddings, and never alters revision. Validates upstream finite geometry and scalar metrics before returning success.
+- **Success Response**: `200 OK`
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "result": {
+    "imageWidth": 1280,
+    "imageHeight": 720,
+    "faceBox": {
+      "x": 0.3,
+      "y": 0.2,
+      "width": 0.3,
+      "height": 0.5
+    },
+    "quality": {
+      "detScore": 0.9985,
+      "faceWidth": 384,
+      "faceHeight": 360,
+      "faceAreaRatio": 0.15,
+      "laplacianVar": 182.4,
+      "meanBrightness": 128.5
+    }
+  }
+}
+```
+
 ---
 
 ## 6. Java `core-service` Error Mapping
@@ -192,6 +256,42 @@ When `core-service` sends enrollment images to `face-service` or receives reques
 | `MIN_LAPLACIAN_VAR` | `100.0` | Minimum Laplacian variance on face crop (sharpness) |
 | `MIN_BRIGHTNESS` | `50.0` | Minimum mean grayscale pixel brightness (illumination) |
 | `MAX_BRIGHTNESS` | `205.0` | Maximum mean grayscale pixel brightness (illumination) |
+
+### 7.1 Local Testing Relaxed Configuration & Revert Instructions
+
+For local testing and webcam integration debugging under varied domestic lighting and laptop camera hardware, relaxed thresholds may be configured in the git-ignored root `.env`:
+
+```env
+# Local-only relaxed face quality config for testing
+MIN_FACE_WIDTH=60
+MIN_FACE_HEIGHT=60
+MIN_FACE_AREA_RATIO=0.03
+MIN_LAPLACIAN_VAR=20
+MIN_BRIGHTNESS=25
+MAX_BRIGHTNESS=235
+```
+
+#### Production Reversion
+To revert back to baseline production defaults, either remove these 6 variables from the repository-root `.env` or set them explicitly to code defaults:
+```env
+MIN_FACE_WIDTH=120
+MIN_FACE_HEIGHT=120
+MIN_FACE_AREA_RATIO=0.10
+MIN_LAPLACIAN_VAR=100.0
+MIN_BRIGHTNESS=50.0
+MAX_BRIGHTNESS=205.0
+```
+
+#### Precedence Notice & Coordinator Startup
+- Precedence order: **OS Process Environment Variables > Root/Service `.env` File > Hardcoded In-Code Defaults**.
+- If the coordinator process or IDE has exported shell environment overrides for any of these 6 threshold variables, those shell variables take precedence over the `.env` file.
+- To ensure the `.env` file values take effect, any process-level threshold environment overrides must be cleared in the coordinator process before starting `face-service`.
+
+#### Low-Quality Risks Disclaimer
+- **Degraded Vector Quality**: Relaxed thresholds allow small (60x60 px / 3% area), blurry (Laplacian variance >= 20), dim (brightness >= 25), or washed out (brightness <= 235) images to pass quality gates.
+- **Biometric Error Rates**: Enrolling low-quality samples significantly elevates False Rejection Rate (FRR) and False Acceptance Rate (FAR) during ArcFace 512-d feature cosine similarity matching.
+- **Strictly Non-Production**: Relaxed thresholds are strictly intended for offline development and local webcam testing; production deployments must always use the standard baseline thresholds (120x120, 10% area, 100 Laplacian, 50–205 brightness).
+
 
 ---
 

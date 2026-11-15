@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import './kiosk.css'
+import { KioskError, recognizeKiosk } from './kiosk-api.ts'
+import type { KioskReason, KioskResult } from './kiosk-api.ts'
+import { captureKioskFrame, startKioskRecognitionLoop } from './kiosk-recognition-loop.ts'
+
+const recognitionMessages: Record<KioskReason, string> = {
+  MATCHED: 'Chấm công thành công (demo)',
+  NO_FACE: 'Đang chờ khuôn mặt…',
+  MULTIPLE_FACES: 'Chỉ để một người trong khung hình.',
+  FACE_TOO_SMALL: 'Hãy đến gần camera hơn.',
+  IMAGE_BLURRY: 'Ảnh bị mờ. Giữ yên và kiểm tra ống kính.',
+  ILLUMINATION_POOR: 'Điều chỉnh ánh sáng đều trên mặt, tránh ngược sáng.',
+  NO_ENROLLED_SAMPLES: 'Chưa có mẫu khuôn mặt đã đăng ký. Nhờ quản trị viên kiểm tra rồi thử lại.',
+  UNKNOWN: 'Chấm công không thành công (demo): chưa nhận diện được.',
+  AMBIGUOUS: 'Chấm công không thành công (demo): kết quả chưa rõ ràng.',
+}
 
 export interface KioskProps {
   onExit: () => void
@@ -47,6 +62,58 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const [recognition, setRecognition] = useState<KioskResult | null>(null)
+  const [recognitionError, setRecognitionError] = useState('')
+  const [recognitionRetry, setRecognitionRetry] = useState(0)
+  const loopRef = useRef<ReturnType<typeof startKioskRecognitionLoop> | null>(null)
+  const drainRef = useRef<Promise<void>>(Promise.resolve())
+
+  const stopRecognition = () => {
+    if (loopRef.current) {
+      loopRef.current.stop()
+      drainRef.current = loopRef.current.drained
+      loopRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    let disposed = false
+    if (status === 'active') {
+      void drainRef.current.then(() => {
+        if (disposed) return
+        setRecognitionError('')
+        const loop = startKioskRecognitionLoop({
+          encode: (signal) => captureKioskFrame(videoRef.current, signal),
+          recognize: recognizeKiosk,
+          result: setRecognition,
+          paused: (failure) => {
+            setRecognition(null)
+            setRecognitionError(failure instanceof KioskError ? failure.message : 'Không thể nhận diện. Vui lòng thử lại.')
+          },
+        })
+        loopRef.current = loop
+      })
+    }
+    return () => {
+      disposed = true
+      stopRecognition()
+    }
+  }, [status, selectedDeviceId, retryCount, recognitionRetry])
+
+  const restartCamera = () => {
+    stopRecognition()
+    setStatus('requesting')
+    setRecognition(null)
+    setRecognitionError('')
+    setVideoResolution(null)
+    setRetryCount((count) => count + 1)
+  }
+
+  const exitKiosk = () => {
+    stopRecognition()
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    onExit()
+  }
 
   // Real-time digital clock tick
   useEffect(() => {
@@ -251,7 +318,7 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
           <button
             type="button"
             className="kiosk-action-btn kiosk-action-btn--primary"
-            onClick={onExit}
+            onClick={exitKiosk}
             aria-label={authenticated ? 'Quay lại trang quản trị' : 'Đăng nhập quản trị'}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -280,6 +347,25 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
             {status === 'unsupported' && 'Trình duyệt không hỗ trợ'}
           </span>
         </div>
+
+        <section
+          className={`kiosk-recognition ${recognition?.success ? 'kiosk-recognition--success' : ''}`}
+          aria-label="Kết quả nhận diện demo"
+        >
+          <p className="kiosk-recognition-message" role="status" aria-live="polite" aria-atomic="true">
+            {status !== 'active' ? 'Nhận diện sẽ bắt đầu khi camera sẵn sàng.' : recognitionError || (recognition ? recognitionMessages[recognition.reason] : 'Đang chờ khuôn mặt…')}
+          </p>
+          <p className="kiosk-demo-notice">Chỉ kiểm tra nhận diện, không lưu chấm công</p>
+          {status === 'active' && (recognitionError || recognition?.reason === 'NO_ENROLLED_SAMPLES') && (
+            <button
+              type="button"
+              className="kiosk-retry-btn"
+              onClick={() => { stopRecognition(); setRecognitionRetry((count) => count + 1) }}
+            >
+              Thử lại nhận diện
+            </button>
+          )}
+        </section>
 
         {/* Camera Viewport Area */}
         <div className="kiosk-viewport-container">
@@ -339,7 +425,7 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
                   <button
                     type="button"
                     className="kiosk-retry-btn"
-                    onClick={() => setRetryCount((c) => c + 1)}
+                    onClick={restartCamera}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
@@ -367,7 +453,7 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
                 <select
                   id="kiosk-camera-select"
                   value={selectedDeviceId}
-                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  onChange={(e) => { stopRecognition(); setStatus('requesting'); setVideoResolution(null); setSelectedDeviceId(e.target.value) }}
                   className="kiosk-select"
                   aria-label="Chọn thiết bị camera đầu vào"
                 >
@@ -400,7 +486,7 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
             <button
               type="button"
               className="kiosk-tool-btn"
-              onClick={() => setRetryCount((c) => c + 1)}
+              onClick={restartCamera}
               title="Khởi động lại luồng camera"
               aria-label="Khởi động lại luồng camera"
             >
@@ -440,7 +526,7 @@ export default function Kiosk({ onExit, authenticated }: KioskProps) {
             </span>
             <div className="instruction-details">
               <strong>Kiểm tra khung hình</strong>
-              <span>Chỉ xem camera, chưa nhận diện hay chấm công</span>
+              <span>Nhận diện tự động, không lưu chấm công</span>
             </div>
           </div>
 

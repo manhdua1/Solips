@@ -3,6 +3,7 @@ package com.pandora.coreservice.controller;
 import com.pandora.coreservice.dto.ApiResponse;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
+import com.pandora.coreservice.dto.FaceQualityCheckResponse;
 import com.pandora.coreservice.exception.AppException;
 import com.pandora.coreservice.exception.ErrorCode;
 import com.pandora.coreservice.service.FaceEnrollmentService;
@@ -21,6 +22,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -87,6 +89,31 @@ public class FaceEnrollmentController {
             @PathVariable("id") UUID id,
             @Valid @RequestBody(required = true) FaceDeleteRequest request) {
         FaceEnrollmentResponse response = faceEnrollmentService.delete(id, request);
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResponse.success(response));
+    }
+
+    @PostMapping(path = "/quality", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<FaceQualityCheckResponse>> checkQuality(
+            @PathVariable("id") UUID id,
+            @RequestParam("image") MultipartFile image,
+            HttpServletRequest request) {
+
+        MultipartHttpServletRequest multipartRequest = WebUtils.getNativeRequest(request, MultipartHttpServletRequest.class);
+        if (multipartRequest == null && request instanceof MultipartHttpServletRequest mr) {
+            multipartRequest = mr;
+        }
+        if (multipartRequest != null) {
+            for (Iterator<String> it = multipartRequest.getFileNames(); it.hasNext(); ) {
+                String fieldName = it.next();
+                if (!"image".equals(fieldName)) {
+                    throw new AppException(ErrorCode.INVALID_REQUEST);
+                }
+            }
+        }
+
+        FaceQualityCheckResponse response = faceEnrollmentService.checkQuality(id, image);
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .body(ApiResponse.success(response));

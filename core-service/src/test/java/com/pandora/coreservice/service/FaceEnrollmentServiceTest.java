@@ -4,6 +4,9 @@ import com.pandora.coreservice.config.FaceProperties;
 import com.pandora.coreservice.dto.FaceDeleteRequest;
 import com.pandora.coreservice.dto.FaceEmbeddingResult;
 import com.pandora.coreservice.dto.FaceEnrollmentResponse;
+import com.pandora.coreservice.dto.FaceQualityCheckResponse;
+import com.pandora.coreservice.dto.FaceBoxDto;
+import com.pandora.coreservice.dto.FaceQualityDto;
 import com.pandora.coreservice.entity.Employee;
 import com.pandora.coreservice.entity.EmployeeFaceEnrollment;
 import com.pandora.coreservice.entity.EmployeeStatus;
@@ -497,5 +500,123 @@ class FaceEnrollmentServiceTest {
 
         assertThat(response).isNotNull();
         verify(faceEnrollmentTransactionService).executeDelete(eq(employeeId), eq(2L));
+    }
+
+    // --- CHECK QUALITY PROBE TESTS ---
+
+    @Test
+    @DisplayName("checkQuality with null employeeId throws INVALID_REQUEST")
+    void checkQuality_nullEmployeeId_throwsInvalidRequest() {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+        AppException ex = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(null, image)
+        );
+        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
+        verifyNoInteractions(faceServiceClient, employeeRepository, faceEnrollmentTransactionService);
+    }
+
+    @Test
+    @DisplayName("checkQuality with empty or null image throws UNSUPPORTED_MEDIA_TYPE")
+    void checkQuality_emptyImage_throwsUnsupportedMediaType() {
+        MockMultipartFile emptyImage = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[0]);
+        AppException ex1 = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, emptyImage)
+        );
+        assertThat(ex1.getErrorCode()).isEqualTo(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+
+        AppException ex2 = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, null)
+        );
+        assertThat(ex2.getErrorCode()).isEqualTo(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+
+        verifyNoInteractions(faceServiceClient, employeeRepository, faceEnrollmentTransactionService);
+    }
+
+    @Test
+    @DisplayName("checkQuality with oversized image throws UPLOAD_TOO_LARGE")
+    void checkQuality_oversizedImage_throwsUploadTooLarge() {
+        MockMultipartFile bigImage = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[3 * 1024 * 1024]);
+        when(faceProperties.getImage()).thenReturn(imageProperties);
+
+        AppException ex = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, bigImage)
+        );
+        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.UPLOAD_TOO_LARGE);
+        verifyNoInteractions(faceServiceClient, employeeRepository, faceEnrollmentTransactionService);
+    }
+
+    @Test
+    @DisplayName("checkQuality with unsupported MIME type throws UNSUPPORTED_MEDIA_TYPE")
+    void checkQuality_unsupportedMime_throwsUnsupportedMediaType() {
+        MockMultipartFile doc = new MockMultipartFile("image", "doc.pdf", "application/pdf", new byte[]{1, 2, 3});
+        when(faceProperties.getImage()).thenReturn(imageProperties);
+
+        AppException ex = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, doc)
+        );
+        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+        verifyNoInteractions(faceServiceClient, employeeRepository, faceEnrollmentTransactionService);
+    }
+
+    @Test
+    @DisplayName("checkQuality when employee not found throws RESOURCE_NOT_FOUND")
+    void checkQuality_employeeNotFound_throwsResourceNotFound() {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+        when(faceProperties.getImage()).thenReturn(imageProperties);
+        when(employeeRepository.findByIdAndDeletedAtIsNull(employeeId)).thenReturn(Optional.empty());
+
+        AppException ex = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, image)
+        );
+        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.RESOURCE_NOT_FOUND);
+        verifyNoInteractions(faceServiceClient, faceEnrollmentTransactionService);
+    }
+
+    @Test
+    @DisplayName("checkQuality with valid image delegates to faceServiceClient and never calls transaction service or alters revision")
+    void checkQuality_success_delegatesToClientWithoutTransactionService() {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+        when(faceProperties.getImage()).thenReturn(imageProperties);
+        when(employeeRepository.findByIdAndDeletedAtIsNull(employeeId)).thenReturn(Optional.of(activeEmployee));
+
+        FaceQualityCheckResponse mockResponse = FaceQualityCheckResponse.builder()
+                .imageWidth(1280)
+                .imageHeight(720)
+                .faceBox(FaceBoxDto.builder().x(0.3).y(0.2).width(0.3).height(0.5).build())
+                .quality(FaceQualityDto.builder().detScore(0.99f).faceWidth(384).faceHeight(360).faceAreaRatio(0.15f).laplacianVar(150f).meanBrightness(120f).build())
+                .build();
+        when(faceServiceClient.checkFaceQuality(image)).thenReturn(mockResponse);
+
+        FaceQualityCheckResponse result = faceEnrollmentService.checkQuality(employeeId, image);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getImageWidth()).isEqualTo(1280);
+        assertThat(result.getImageHeight()).isEqualTo(720);
+        assertThat(result.getFaceBox().getX()).isEqualTo(0.3);
+        assertThat(result.getQuality().getDetScore()).isEqualTo(0.99f);
+
+        // Verification: faceServiceClient called once, NO transaction service, NO repo saves, NO revision changes
+        verify(faceServiceClient, times(1)).checkFaceQuality(image);
+        verifyNoInteractions(faceEnrollmentTransactionService);
+        verify(employeeRepository, never()).save(any());
+        assertThat(activeEmployee.getFaceRevision()).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("checkQuality propagates upstream quality exceptions (NO_FACE, BLURRY, etc.) without altering state")
+    void checkQuality_upstreamErrorPropagates() {
+        MockMultipartFile image = new MockMultipartFile("image", "probe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+        when(faceProperties.getImage()).thenReturn(imageProperties);
+        when(employeeRepository.findByIdAndDeletedAtIsNull(employeeId)).thenReturn(Optional.of(activeEmployee));
+
+        when(faceServiceClient.checkFaceQuality(image)).thenThrow(new AppException(ErrorCode.NO_FACE));
+
+        AppException ex = assertThrows(AppException.class, () ->
+                faceEnrollmentService.checkQuality(employeeId, image)
+        );
+        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.NO_FACE);
+
+        verifyNoInteractions(faceEnrollmentTransactionService);
+        verify(employeeRepository, never()).save(any());
     }
 }

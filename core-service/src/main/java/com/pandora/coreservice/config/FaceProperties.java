@@ -11,6 +11,7 @@ public class FaceProperties {
 
     private Service service = new Service();
     private Image image = new Image();
+    private Recognition recognition = new Recognition();
 
     @Getter
     @Setter
@@ -28,5 +29,12 @@ public class FaceProperties {
     @Setter
     public static class Image {
         private long maxBytes = 2 * 1024 * 1024L; // 2 MiB
+    }
+
+    @Getter
+    @Setter
+    public static class Recognition {
+        private double minScore = 0.50;
+        private double minMargin = 0.08;
     }
 }
